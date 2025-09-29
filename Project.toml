@@ -1,0 +1,19 @@
+name = "MadNLP4NN"
+uuid = "8b5a4e10-9c3d-4f1e-8f2a-3e4d5c6f7a8b"
+authors = ["Hongxuan Liu"]
+version = "0.1.0"
+
+[deps]
+PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+MadNLP = "2621e9c9-9eb4-46b1-8089-e8c72242dfb6"
+NLPModels = "a4795742-8479-5a88-8948-cc11e1c8c1a6"
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+
+[compat]
+julia = "1.9"
+PythonCall = "0.9"
+JSON3 = "1.13"
+MadNLP = "0.7"
+NLPModels = "0.20"
+JuMP = "1.15"
