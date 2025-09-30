@@ -4,6 +4,7 @@
 *.jl.mem
 deps/deps.jl
 Manifest.toml
+LocalPreferences.toml
 
 # Python
 __pycache__/
@@ -61,3 +62,11 @@ wandb/
 tmp/
 temp/
 *.tmp
+
+# zsh
+.zshrc
+.zprofile
+.zsh_history
+
+# conda
+.CondaPkg

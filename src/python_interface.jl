@@ -27,10 +27,16 @@ setup_python_env()
 function setup_python_env(; force_reinstall=false)
     @info "Setting up Python environment for MadNLP4NN..."
     
-    # Add Python directory to path
-    py_path = pyimport("sys").path
-    if !(PYTHON_DIR in py_path)
-        pylist(py_path).insert(0, PYTHON_DIR)
+    # Add Python directory to path (use absolute path)
+    abs_python_dir = abspath(PYTHON_DIR)
+    sys = pyimport("sys")
+    path_strings = [string(p) for p in sys.path]
+    
+    if !(abs_python_dir in path_strings)
+        sys.path.insert(0, abs_python_dir)
+        @info "Added Python directory to sys.path: $abs_python_dir"
+    else
+        @info "Python directory already in sys.path: $abs_python_dir"
     end
     
     # Check if required packages are installed
@@ -94,9 +100,14 @@ function create_dataset(;
     @info "Creating dataset: $dataset_type"
     
     # Import Python modules
+    # Ensure Python directory is in path (use absolute path)
+    abs_python_dir = abspath(PYTHON_DIR)
     sys = pyimport("sys")
-    if !(PYTHON_DIR in sys.path)
-        pylist(sys.path).insert(0, PYTHON_DIR)
+    path_strings = [string(p) for p in sys.path]
+    
+    if !(abs_python_dir in path_strings)
+        sys.path.insert(0, abs_python_dir)
+        @debug "Added Python directory to sys.path: $abs_python_dir"
     end
     
     dataset_module = pyimport("dataset_constructor")
@@ -348,9 +359,14 @@ function load_trained_model(model_path::String)
     @info "Loading model from: $model_path"
     
     # Import Python modules
+    # Ensure Python directory is in path (use absolute path)
+    abs_python_dir = abspath(PYTHON_DIR)
     sys = pyimport("sys")
-    if !(PYTHON_DIR in sys.path)
-        pylist(sys.path).insert(0, PYTHON_DIR)
+    path_strings = [string(p) for p in sys.path]
+    
+    if !(abs_python_dir in path_strings)
+        sys.path.insert(0, abs_python_dir)
+        @debug "Added Python directory to sys.path: $abs_python_dir"
     end
     
     torch = pyimport("torch")

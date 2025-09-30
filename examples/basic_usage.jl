@@ -41,8 +41,8 @@ metadata_mnist = create_dataset(
 )
 
 println("✓ MNIST loaded successfully!")
-println("  Type: $(metadata_mnist[:dataset_type])")
-println("  Input dimension: $(metadata_mnist[:input_dim])")
+println("  Type: $(metadata_mnist["dataset_type"])")
+println("  Input dimension: $(metadata_mnist["input_dim"])")
 
 # =============================================================================
 # Example 3: Train a simple model (no hyperparameter search)
