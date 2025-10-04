@@ -1,429 +1,393 @@
 """
-NLP interface for adversarial optimization using MadNLP.
-This module provides structures and functions to formulate the adversarial
-problem as an NLP and solve it using MadNLP.
+NLP interface for optimization using neural networks and MadNLP.
 
-The problem is formulated as:
-    max_x ||f(x; θ) - y||^2
-    s.t. ||x - x*|| ≤ ε
-    
-where f(x; θ) is a trained neural network with parameters θ,
-x* is the original input, and ε is the perturbation radius.
+This module provides structures and functions to formulate optimization problems
+involving neural networks as NLPs and solve them using MadNLP.
+
+Problem Formulation:
+    min_x  f(x, θ)
+    s.t.   g(x) ≤ 0
+
+where:
+- x: decision variables
+- θ: neural network parameters
+- f(x, θ): objective function using neural network output and x-related expressions
+- g(x): constraint functions (e.g., bounds on x)
+
+The formulation uses NLPModels callbacks to provide numerical values only,
+not symbolic representations.
 """
 
 using NLPModels
 using MadNLP
+using Flux
 using LinearAlgebra
+using ForwardDiff
+
+# ============================================================================
+# Smoothed Activation Functions
+# ============================================================================
 
 """
-    AdversarialNLPModel
+    smooth_relu(x; α=1e-3)
 
-NLP model for adversarial optimization on neural networks.
+Smoothed ReLU activation for differentiability.
 
-# Fields
-- `θ`: Neural network parameters (weights and biases)
-- `x_star`: Original input point
-- `y_target`: Target output (to maximize distance from)
-- `epsilon`: Perturbation radius
-- `input_dim`: Input dimension
-- `constraint_type`: Type of constraint ("linf", "l2", "box")
+Uses the approximation: smooth_relu(x) ≈ log(1 + exp(x/α)) * α
 
-# TODO: This is a placeholder structure. The actual implementation should:
-1. Parse the network architecture from the saved model
-2. Implement forward pass with ReLU activations
-3. Compute gradients and Hessians for the objective and constraints
-4. Handle different constraint types (L∞, L2, box constraints)
-"""
-struct AdversarialNLPModelData
-    θ::Dict{String, Any}  # Network parameters
-    network_config::Dict{String, Any}  # Network architecture
-    x_star::Vector{Float64}  # Original point
-    y_target::Vector{Float64}  # Target output
-    epsilon::Float64  # Perturbation radius
-    constraint_type::String  # "linf", "l2", or "box"
-end
+This ensures the function is smooth everywhere, which is required for
+second-order optimization methods like those used in MadNLP.
 
-
-"""
-    create_adversarial_nlp(
-        model_path::String,
-        x_star::Vector{Float64},
-        y_target::Vector{Float64};
-        epsilon::Float64=0.1,
-        constraint_type::String="l2"
-    )
-
-Create an NLP model for adversarial optimization.
+For practical purposes with α small, this behaves like ReLU but is
+differentiable at x=0.
 
 # Arguments
-- `model_path::String`: Path to trained neural network
-- `x_star::Vector{Float64}`: Original input point
-- `y_target::Vector{Float64}`: Target output
-- `epsilon::Float64`: Perturbation radius (default: 0.1)
-- `constraint_type::String`: Type of constraint ("linf", "l2", "box")
+- `x`: Input value
+- `α`: Smoothing parameter (smaller = closer to ReLU, but less smooth)
+"""
+function smooth_relu(x::T; α=1e-3) where T<:Real
+    # Numerically stable implementation
+    # Use the same type as input for numerical stability
+    # Use softplus: log(1 + exp(x/α)) * α
+    alpha = convert(T, α)
+    
+    # For numerical stability:
+    # if x/α > 20, softplus(x/α) ≈ x/α, so result ≈ x
+    # Use ifelse to ensure differentiability
+    scaled = x / alpha
+    return ifelse(scaled > 20, x, alpha * log(one(T) + exp(scaled)))
+end
+
+# Array version with element-wise application
+smooth_relu(x::AbstractArray; α=1e-3) = smooth_relu.(x; α=α)
+
+
+# ============================================================================
+# Neural Network Model Loading and Conversion
+# ============================================================================
+
+"""
+    load_pytorch_model_to_flux(model_path::String)
+
+Load a PyTorch model and convert it to Flux.jl format.
+
+# Arguments
+- `model_path::String`: Path to the saved PyTorch model (.pt file)
 
 # Returns
-- `AdversarialNLPModel`: NLP model ready for MadNLP
+- `model`: Flux Chain representing the neural network
+- `config`: Dictionary with model configuration
 
 # Example
 ```julia
-using MadNLP4NN
-
-# Load trained model
-model_path = "./output/models/gaussian_mixture_medium_mlp/model_seed42.pt"
-
-# Define original point and target
-x_star = randn(784)
-y_target = randn(10)
-
-# Create NLP model
-nlp = create_adversarial_nlp(model_path, x_star, y_target, epsilon=0.1)
-
-# Solve with MadNLP
-solver = MadNLP.MadNLPSolver(nlp)
-result = MadNLP.solve!(solver)
-
-# Get adversarial point
-x_adv = result.solution
+model, config = load_pytorch_model_to_flux("output/models/dataset/model.pt")
 ```
-
-# TODO: Implementation notes for future development
-1. Load network parameters from the saved model
-2. Parse network architecture (layer sizes, activation functions)
-3. Implement forward pass: f(x; θ) for the network
-4. Compute objective: obj(x) = ||f(x; θ) - y_target||^2
-5. Compute objective gradient: ∇obj(x) using backpropagation
-6. Compute objective Hessian: ∇²obj(x) using Hessian-vector products
-7. Implement constraints based on constraint_type:
-   - L∞: |x_i - x_star_i| ≤ ε for all i (box constraints)
-   - L2: ||x - x_star||_2 ≤ ε (quadratic constraint)
-   - Box: x_min ≤ x ≤ x_max (general box constraints)
-8. Use NLPModels.jl API to create the model
-9. Exploit GPU capabilities for large-scale problems
 """
-function create_adversarial_nlp(
-    model_path::String,
-    x_star::Vector{Float64},
-    y_target::Vector{Float64};
-    epsilon::Float64=0.1,
-    constraint_type::String="l2"
-)
-    @info """
-    Creating adversarial NLP model...
-    
-    NOTE: This is currently a placeholder function. To complete the implementation:
-    
-    1. Load the trained neural network parameters from '$model_path'
-    2. Extract network architecture (layer sizes, weights, biases)
-    3. Implement neural network forward pass with ReLU activations
-    4. Implement objective function: ||f(x; θ) - y_target||^2
-    5. Implement gradient and Hessian computations
-    6. Set up constraints: ||x - x_star|| ≤ $epsilon (type: $constraint_type)
-    7. Create NLPModels.jl compatible model
-    8. Return model for MadNLP solver
-    
-    Key challenges:
-    - Handling ReLU non-differentiability (use smoothing or reformulation)
-    - Efficient Hessian computation (consider Hessian-vector products)
-    - GPU acceleration for large networks
-    - Sparse Jacobian/Hessian for better performance
-    
-    Recommended approach:
-    - Use NLPModels.jl's ADNLPModel for automatic differentiation
-    - Or implement custom model with manual derivatives for better control
-    - Consider using JuMP.jl for easier constraint specification
-    """
-    
-    # Load model (placeholder - needs actual implementation)
+function load_pytorch_model_to_flux(model_path::String)
+    # Load PyTorch model using our existing function
     state_dict, model_config, train_args, history = load_trained_model(model_path)
     
-    # Create model data structure
-    model_data = AdversarialNLPModelData(
-        state_dict,
-        model_config,
-        x_star,
-        y_target,
-        epsilon,
-        constraint_type
-    )
+    model_type = model_config["model_type"]
     
-    @warn "AdversarialNLPModel is not yet implemented. This is a placeholder."
+    # Handle both Python class names and lowercase versions
+    if model_type in ["mlp", "MLPClassifier"]
+        model = build_mlp_from_state_dict(state_dict, model_config)
+    elseif model_type in ["resmlp", "ResMLPClassifier"]
+        model = build_resmlp_from_state_dict(state_dict, model_config)
+    else
+        error("Unknown model type: $model_type")
+    end
     
-    return model_data
+    return model, model_config
 end
 
 
 """
-    solve_adversarial(
-        nlp_model;
-        solver_options=Dict()
-    )
+    build_mlp_from_state_dict(state_dict, config)
 
-Solve the adversarial optimization problem using MadNLP.
+Build a Flux MLP from PyTorch state dict.
 
-# Arguments
-- `nlp_model`: NLP model from create_adversarial_nlp
-- `solver_options`: Dict of MadNLP solver options
-
-# Returns
-- Solution dictionary with adversarial point and objective value
-
-# Example
-```julia
-nlp = create_adversarial_nlp(model_path, x_star, y_target)
-result = solve_adversarial(nlp, solver_options=Dict("max_iter" => 1000))
-```
-
-# TODO: 
-1. Configure MadNLP for GPU acceleration
-2. Set appropriate solver tolerances
-3. Handle different constraint types
-4. Return comprehensive solution information
+Note: ReLU activations are handled with a smoothed version to ensure differentiability.
 """
-function solve_adversarial(
-    nlp_model;
-    solver_options=Dict()
-)
-    @warn "solve_adversarial is not yet implemented. This is a placeholder."
+function build_mlp_from_state_dict(state_dict, config)
+    layers = []
     
-    @info """
-    To implement this function:
+    # Extract layer indices from keys (handle both "layers.X" and "network.X" formats)
+    all_keys = collect(keys(state_dict))
+    layer_indices = Int[]
+    for key in all_keys
+        # Match either "layers.X.weight" or "network.X.weight"
+        m = match(r"^(?:layers|network)\.(\d+)\.weight$", key)
+        if m !== nothing
+            push!(layer_indices, parse(Int, m.captures[1]))
+        end
+    end
+    sort!(layer_indices)
     
-    1. Create MadNLP solver instance:
-       solver = MadNLPSolver(nlp_model, option_dict=solver_options)
+    if isempty(layer_indices)
+        error("No layers found in state_dict. Available keys: $(collect(keys(state_dict)))")
+    end
     
-    2. Configure for GPU (if available):
-       - Set linear_solver=MadNLPGPU
-       - Enable CUDA kernels
+    # Determine the prefix (layers or network)
+    prefix = occursin("network.", first(all_keys)) ? "network" : "layers"
     
-    3. Solve the problem:
-       result = MadNLP.solve!(solver)
+    # Build layers
+    for layer_idx in layer_indices
+        weight_key = "$prefix.$layer_idx.weight"
+        bias_key = "$prefix.$layer_idx.bias"
+        
+        # Convert PyTorch tensors to Julia arrays
+        # Both PyTorch and Flux use (out, in) format, so no transpose needed
+        W = Float64.(pyconvert(Array, state_dict[weight_key]))
+        b = Float64.(vec(pyconvert(Array, state_dict[bias_key])))
+        
+        # Add dense layer
+        push!(layers, Dense(W, b))
+        
+        # Add activation (ReLU for hidden layers, except last)
+        if layer_idx != layer_indices[end]
+            push!(layers, x -> smooth_relu.(x))
+        end
+    end
     
-    4. Extract and return solution:
-       - Adversarial point: x_adv = result.solution
-       - Objective value: obj_val = result.objective
-       - Constraint violation: cons_viol = result.constraint_violation
-       - Solver status: status = result.status
+    return Chain(layers...)
+end
+
+
+"""
+    build_resmlp_from_state_dict(state_dict, config)
+
+Build a Flux Residual MLP from PyTorch state dict.
+"""
+function build_resmlp_from_state_dict(state_dict, config)
+    # Initial projection
+    # No transpose needed - both PyTorch and Flux use (out, in)
+    W_init = pyconvert(Array, state_dict["init_proj.weight"])
+    b_init = pyconvert(Array, state_dict["init_proj.bias"])
+    W_init = Float64.(W_init)
+    b_init = Float64.(vec(b_init))
     
-    5. Verify the solution:
-       - Check perturbation radius: ||x_adv - x_star|| ≤ ε
-       - Compute actual network output: f(x_adv; θ)
-       - Compute adversarial loss: ||f(x_adv; θ) - y_target||^2
-    """
+    init_proj = Dense(W_init, b_init)
     
-    return nothing
+    # Build residual blocks
+    n_blocks = config["n_blocks"]
+    blocks = []
+    
+    for i in 0:(n_blocks-1)
+        # Block layers - no transpose needed
+        W1 = pyconvert(Array, state_dict["blocks.$i.fc1.weight"])
+        b1 = pyconvert(Array, state_dict["blocks.$i.fc1.bias"])
+        W2 = pyconvert(Array, state_dict["blocks.$i.fc2.weight"])
+        b2 = pyconvert(Array, state_dict["blocks.$i.fc2.bias"])
+        
+        W1 = Float64.(W1)
+        b1 = Float64.(vec(b1))
+        W2 = Float64.(W2)
+        b2 = Float64.(vec(b2))
+        
+        # Create residual block as a function
+        block = function(x)
+            identity = x
+            out = Dense(W1, b1)(x)
+            out = smooth_relu.(out)
+            out = Dense(W2, b2)(out)
+            return out .+ identity
+        end
+        
+        push!(blocks, block)
+    end
+    
+    # Output layer - no transpose needed
+    W_out = pyconvert(Array, state_dict["output_layer.weight"])
+    b_out = pyconvert(Array, state_dict["output_layer.bias"])
+    W_out = Float64.(W_out)
+    b_out = Float64.(vec(b_out))
+    
+    output_layer = Dense(W_out, b_out)
+    
+    # Combine into a single model
+    model = function(x)
+        out = init_proj(x)
+        out = smooth_relu.(out)
+        for block in blocks
+            out = block(out)
+            out = smooth_relu.(out)
+        end
+        out = output_layer(out)
+        return out
+    end
+    
+    return model
 end
 
 
 # ============================================================================
-# Helper functions for neural network forward pass
+# Objective and Constraint Function Modules
 # ============================================================================
 
 """
-    relu(x)
+    AbstractObjectiveFunction
 
-ReLU activation function.
+Abstract type for objective functions f(x, θ).
+
+Subtypes should implement:
+- `evaluate(obj, x, nn_output)`: Compute objective value
 """
-relu(x) = max.(0.0, x)
+abstract type AbstractObjectiveFunction end
+
+"""
+    AbstractConstraintFunction
+
+Abstract type for constraint functions g(x).
+
+Subtypes should implement:
+- `evaluate(cons, x)`: Compute constraint values (should be ≤ 0)
+- `num_constraints(cons)`: Number of constraints
+"""
+abstract type AbstractConstraintFunction end
 
 
 """
-    forward_pass_mlp(x, weights, biases)
+    NeuralNetworkObjective
 
-Forward pass through an MLP with ReLU activations.
+Objective function based on neural network output.
 
-# Arguments
-- `x`: Input vector
-- `weights`: List of weight matrices for each layer
-- `biases`: List of bias vectors for each layer
-
-# Returns
-- Output vector
-
-# TODO: Implement this for actual MLP forward pass
+Example: Minimize squared distance to a target:
+    f(x) = ||nn(x) - target||²
 """
-function forward_pass_mlp(x, weights, biases)
-    # TODO: Implement
-    # current = x
-    # for i in 1:length(weights)-1
-    #     current = relu(weights[i] * current .+ biases[i])
-    # end
-    # output = weights[end] * current .+ biases[end]
-    # return output
+struct NeuralNetworkObjective <: AbstractObjectiveFunction
+    target::Vector{Float64}
+    weight::Float64
     
-    error("forward_pass_mlp not yet implemented")
+    NeuralNetworkObjective(target; weight=1.0) = new(target, weight)
+end
+
+function evaluate(obj::NeuralNetworkObjective, x::AbstractVector, nn_output::AbstractVector)
+    diff = nn_output .- obj.target
+    return obj.weight * dot(diff, diff)
 end
 
 
 """
-    gradient_backprop(x, weights, biases, y_target)
+    QuadraticRegularization
 
-Compute gradient of objective using backpropagation.
-
-# TODO: Implement this for gradient computation
+Regularization term: f(x) = weight * ||x - center||²
 """
-function gradient_backprop(x, weights, biases, y_target)
-    error("gradient_backprop not yet implemented")
+struct QuadraticRegularization <: AbstractObjectiveFunction
+    center::Vector{Float64}
+    weight::Float64
+    
+    QuadraticRegularization(center; weight=0.01) = new(center, weight)
 end
 
-
-# ============================================================================
-# Interface hints and documentation
-# ============================================================================
-
-"""
-# NLP Interface Hints for Future Implementation
-
-## Key Components Needed:
-
-### 1. Neural Network Forward Pass
-You'll need to implement the forward pass through the trained network:
-- Parse layer structure from saved model
-- Implement matrix multiplications: z = Wx + b
-- Apply ReLU activations: a = max(0, z)
-- Handle different network architectures (MLP, ResidualMLP)
-
-### 2. Objective Function
-The objective is to maximize the distance to the target:
-```
-f(x) = ||network(x; θ) - y_target||²
-```
-
-For NLP solvers, you typically minimize, so use:
-```
-f(x) = -||network(x; θ) - y_target||²
-```
-
-### 3. Gradient Computation
-Use backpropagation to compute ∇f(x):
-- Forward pass to compute activations
-- Backward pass to compute gradients
-- Chain rule through ReLU: ∇relu(z) = 1 if z > 0, else 0
-
-### 4. Hessian Computation (for 2nd order methods)
-Two options:
-a) Exact Hessian: Expensive for large networks
-b) Hessian-vector products: More efficient, use forward-mode AD
-
-For MadNLP (IPOPT-style), you can provide:
-- Exact Hessian (if small network)
-- Hessian-vector products via `hprod!` callback
-- Quasi-Newton approximation (L-BFGS)
-
-### 5. Constraints
-Implement based on constraint_type:
-
-**L∞ norm (box constraints):**
-```
-x_star_i - ε ≤ x_i ≤ x_star_i + ε  for all i
-```
-
-**L2 norm (quadratic constraint):**
-```
-||x - x_star||² ≤ ε²
-```
-Gradient: ∇c(x) = 2(x - x_star)
-Hessian: ∇²c(x) = 2I
-
-### 6. NLPModels.jl Integration
-Create a custom NLP model:
-
-```julia
-using NLPModels
-
-mutable struct AdversarialNLPModel <: AbstractNLPModel
-    meta::NLPModelMeta
-    counters::Counters
-    # Add your data fields
-    weights::Vector{Matrix{Float64}}
-    biases::Vector{Vector{Float64}}
-    x_star::Vector{Float64}
-    y_target::Vector{Float64}
-    epsilon::Float64
+function evaluate(obj::QuadraticRegularization, x::AbstractVector, nn_output::AbstractVector)
+    diff = x .- obj.center
+    return obj.weight * dot(diff, diff)
 end
 
-# Implement required methods:
-function NLPModels.obj(nlp::AdversarialNLPModel, x)
-    # Return objective value
-end
-
-function NLPModels.grad!(nlp::AdversarialNLPModel, x, g)
-    # Fill gradient g
-end
-
-function NLPModels.hess_structure!(nlp::AdversarialNLPModel, rows, cols)
-    # Define Hessian sparsity structure
-end
-
-function NLPModels.hess_coord!(nlp::AdversarialNLPModel, x, vals; obj_weight=1.0, y=zeros(0))
-    # Fill Hessian values
-end
-
-function NLPModels.cons!(nlp::AdversarialNLPModel, x, c)
-    # Fill constraint values
-end
-
-function NLPModels.jac_structure!(nlp::AdversarialNLPModel, rows, cols)
-    # Define Jacobian sparsity structure
-end
-
-function NLPModels.jac_coord!(nlp::AdversarialNLPModel, x, vals)
-    # Fill Jacobian values
-end
-```
-
-### 7. MadNLP Solver Configuration
-```julia
-using MadNLP
-
-# Create solver
-solver = MadNLPSolver(
-    nlp;
-    max_iter=1000,
-    tol=1e-6,
-    linear_solver=MadNLPMumps,  # Or MadNLPGPU for GPU
-    print_level=MadNLP.INFO
-)
-
-# Solve
-result = MadNLP.solve!(solver)
-
-# Extract solution
-x_adv = result.solution
-obj_val = result.objective
-```
-
-### 8. GPU Acceleration (if using MadNLP GPU)
-- Use CUDA.jl for GPU arrays
-- Transfer network parameters to GPU
-- Implement forward/backward pass with GPU kernels
-- Use sparse GPU matrices for better performance
-
-## Recommended Development Steps:
-
-1. Start with a simple 2-layer MLP
-2. Implement forward pass and verify outputs match PyTorch
-3. Implement gradient computation and verify with finite differences
-4. Test with box constraints (L∞) first (simpler)
-5. Add L2 constraint support
-6. Integrate with NLPModels.jl
-7. Test with MadNLP on small problems
-8. Optimize for larger networks
-9. Add GPU support if needed
-
-## Testing Strategy:
-
-1. Verify forward pass matches PyTorch exactly
-2. Verify gradients using finite differences
-3. Test on toy problems with known solutions
-4. Compare with PGD (Projected Gradient Descent) for validation
-5. Benchmark against other adversarial attack methods
-
-## References:
-
-- NLPModels.jl: https://github.com/JuliaSmoothOptimizers/NLPModels.jl
-- MadNLP.jl: https://github.com/MadNLP/MadNLP.jl
-- Adversarial examples: https://arxiv.org/abs/1412.6572
 
 """
-const NLP_IMPLEMENTATION_HINTS = nothing
+    CompositeObjective
+
+Composite objective function combining multiple objectives.
+
+    f(x) = sum(weight_i * f_i(x))
+"""
+struct CompositeObjective <: AbstractObjectiveFunction
+    objectives::Vector{AbstractObjectiveFunction}
+    
+    CompositeObjective(objs...) = new([objs...])
+end
+
+function evaluate(obj::CompositeObjective, x::AbstractVector, nn_output::AbstractVector)
+    # Use eltype(x) to support automatic differentiation
+    T = promote_type(eltype(x), eltype(nn_output))
+    total = zero(T)
+    for sub_obj in obj.objectives
+        total += evaluate(sub_obj, x, nn_output)
+    end
+    return total
+end
+
+
+"""
+    BoxConstraints
+
+Box constraints: x_min ≤ x ≤ x_max
+
+Formulated as: x - x_max ≤ 0 and x_min - x ≤ 0
+"""
+struct BoxConstraints <: AbstractConstraintFunction
+    x_min::Vector{Float64}
+    x_max::Vector{Float64}
+    
+    function BoxConstraints(x_min, x_max)
+        @assert length(x_min) == length(x_max)
+        @assert all(x_min .<= x_max)
+        new(x_min, x_max)
+    end
+end
+
+function evaluate(cons::BoxConstraints, x::AbstractVector)
+    n = length(x)
+    # Use eltype(x) to support automatic differentiation (ForwardDiff.Dual)
+    T = eltype(x)
+    c = zeros(T, 2n)
+    c[1:n] .= x .- cons.x_max  # x ≤ x_max
+    c[n+1:2n] .= cons.x_min .- x  # x_min ≤ x
+    return c
+end
+
+num_constraints(cons::BoxConstraints) = 2 * length(cons.x_min)
+
+
+"""
+    SphericalConstraint
+
+Spherical constraint: ||x - center||² ≤ radius²
+
+Formulated as: ||x - center||² - radius² ≤ 0
+"""
+struct SphericalConstraint <: AbstractConstraintFunction
+    center::Vector{Float64}
+    radius::Float64
+    
+    SphericalConstraint(center, radius) = new(center, radius)
+end
+
+function evaluate(cons::SphericalConstraint, x::AbstractVector)
+    diff = x .- cons.center
+    return [dot(diff, diff) - cons.radius^2]
+end
+
+num_constraints(cons::SphericalConstraint) = 1
+
+
+"""
+    CompositeConstraint
+
+Composite constraint combining multiple constraints.
+"""
+struct CompositeConstraint <: AbstractConstraintFunction
+    constraints::Vector{AbstractConstraintFunction}
+    
+    CompositeConstraint(cons...) = new([cons...])
+end
+
+function evaluate(cons::CompositeConstraint, x::AbstractVector)
+    # Use eltype(x) to support automatic differentiation
+    T = eltype(x)
+    c = T[]
+    for sub_cons in cons.constraints
+        append!(c, evaluate(sub_cons, x))
+    end
+    return c
+end
+
+function num_constraints(cons::CompositeConstraint)
+    return sum(num_constraints(c) for c in cons.constraints)
+end
+
+
+# Continued in next part...
+

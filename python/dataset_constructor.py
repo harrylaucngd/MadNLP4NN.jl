@@ -92,11 +92,22 @@ class GaussianMixtureDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.data[idx], self.labels[idx]
     
-    def save(self, save_dir: str):
-        """Save dataset to disk."""
-        os.makedirs(save_dir, exist_ok=True)
-        torch.save(self.data, os.path.join(save_dir, 'data.pt'))
-        torch.save(self.labels, os.path.join(save_dir, 'labels.pt'))
+    def save(self, save_dir: str, dataset_name: str = None):
+        """Save dataset to disk.
+        
+        Args:
+            save_dir: Base directory to save dataset (e.g., output/datasets/gaussian_mixture/)
+            dataset_name: Name of the dataset folder (e.g., GM_n10000_d500_c10_comp10_s42)
+                         If None, saves directly to save_dir
+        """
+        if dataset_name:
+            full_save_dir = os.path.join(save_dir, dataset_name)
+        else:
+            full_save_dir = save_dir
+            
+        os.makedirs(full_save_dir, exist_ok=True)
+        torch.save(self.data, os.path.join(full_save_dir, 'data.pt'))
+        torch.save(self.labels, os.path.join(full_save_dir, 'labels.pt'))
         
         metadata = {
             'n_samples': len(self.data),
@@ -105,7 +116,7 @@ class GaussianMixtureDataset(Dataset):
             'n_components': self.n_components,
             'dataset_type': 'gaussian_mixture'
         }
-        with open(os.path.join(save_dir, 'metadata.json'), 'w') as f:
+        with open(os.path.join(full_save_dir, 'metadata.json'), 'w') as f:
             json.dump(metadata, f, indent=2)
 
 
@@ -198,11 +209,22 @@ class NonlinearManifoldDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.data[idx], self.labels[idx]
     
-    def save(self, save_dir: str):
-        """Save dataset to disk."""
-        os.makedirs(save_dir, exist_ok=True)
-        torch.save(self.data, os.path.join(save_dir, 'data.pt'))
-        torch.save(self.labels, os.path.join(save_dir, 'labels.pt'))
+    def save(self, save_dir: str, dataset_name: str = None):
+        """Save dataset to disk.
+        
+        Args:
+            save_dir: Base directory to save dataset (e.g., output/datasets/nonlinear_manifold/)
+            dataset_name: Name of the dataset folder (e.g., NM_n10000_a500_m50_c10_polynomial_s42)
+                         If None, saves directly to save_dir
+        """
+        if dataset_name:
+            full_save_dir = os.path.join(save_dir, dataset_name)
+        else:
+            full_save_dir = save_dir
+            
+        os.makedirs(full_save_dir, exist_ok=True)
+        torch.save(self.data, os.path.join(full_save_dir, 'data.pt'))
+        torch.save(self.labels, os.path.join(full_save_dir, 'labels.pt'))
         
         metadata = {
             'n_samples': len(self.data),
@@ -212,7 +234,7 @@ class NonlinearManifoldDataset(Dataset):
             'nonlinearity': self.nonlinearity,
             'dataset_type': 'nonlinear_manifold'
         }
-        with open(os.path.join(save_dir, 'metadata.json'), 'w') as f:
+        with open(os.path.join(full_save_dir, 'metadata.json'), 'w') as f:
             json.dump(metadata, f, indent=2)
 
 

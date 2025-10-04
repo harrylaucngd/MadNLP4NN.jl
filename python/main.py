@@ -25,9 +25,12 @@ from trainer import (
 
 def create_dataset_from_args(args):
     """Create dataset based on arguments."""
-    save_dir = os.path.join(args.output_dir, 'datasets', args.dataset_type)
     
     if args.dataset_type == 'gaussian_mixture':
+        # Generate dataset name based on parameters
+        dataset_name = f"GM_n{args.n_samples}_d{args.input_dim}_c{args.output_dim}_comp{args.n_components}_s{args.seed}"
+        save_dir = os.path.join(args.output_dir, 'datasets', 'gaussian_mixture')
+        
         dataset = GaussianMixtureDataset(
             n_samples=args.n_samples,
             input_dim=args.input_dim,
@@ -35,10 +38,14 @@ def create_dataset_from_args(args):
             n_components=args.n_components,
             seed=args.seed
         )
-        dataset.save(save_dir)
-        return dataset, dataset.input_dim, dataset.output_dim
+        dataset.save(save_dir, dataset_name)
+        return dataset, dataset.input_dim, dataset.output_dim, dataset_name
     
     elif args.dataset_type == 'nonlinear_manifold':
+        # Generate dataset name based on parameters
+        dataset_name = f"NM_n{args.n_samples}_a{args.input_dim}_m{args.manifold_dim}_c{args.output_dim}_{args.nonlinearity}_s{args.seed}"
+        save_dir = os.path.join(args.output_dir, 'datasets', 'nonlinear_manifold')
+        
         dataset = NonlinearManifoldDataset(
             n_samples=args.n_samples,
             ambient_dim=args.input_dim,
@@ -47,10 +54,11 @@ def create_dataset_from_args(args):
             nonlinearity=args.nonlinearity,
             seed=args.seed
         )
-        dataset.save(save_dir)
-        return dataset, dataset.ambient_dim, dataset.output_dim
+        dataset.save(save_dir, dataset_name)
+        return dataset, dataset.ambient_dim, dataset.output_dim, dataset_name
     
     elif args.dataset_type in ['mnist', 'fashionmnist', 'cifar10']:
+        save_dir = os.path.join(args.output_dir, 'datasets', args.dataset_type)
         train_dataset, test_dataset, metadata = load_real_dataset(
             dataset_name=args.dataset_type,
             data_dir=save_dir,
@@ -64,7 +72,7 @@ def create_dataset_from_args(args):
         # and combine train+test for the full dataset
         from torch.utils.data import ConcatDataset
         full_dataset = ConcatDataset([train_dataset, test_dataset])
-        return full_dataset, metadata['input_dim'], metadata['output_dim']
+        return full_dataset, metadata['input_dim'], metadata['output_dim'], args.dataset_type
     
     else:
         raise ValueError(f"Unknown dataset type: {args.dataset_type}")
@@ -85,8 +93,9 @@ def main(args):
     
     # Create or load dataset
     print("\n[1/5] Creating/Loading dataset...")
-    dataset, input_dim, output_dim = create_dataset_from_args(args)
+    dataset, input_dim, output_dim, dataset_name = create_dataset_from_args(args)
     print(f"Dataset size: {len(dataset)}")
+    print(f"Dataset name: {dataset_name}")
     print(f"Input dim: {input_dim}, Output dim: {output_dim}")
     
     # Create data loaders
@@ -172,12 +181,16 @@ def main(args):
         verbose=True
     )
     
-    # Save model
+    # Save model with better organization
     print("\nSaving model...")
+    
+    # Organize models by dataset name and model config
+    # Structure: output/models/{dataset_name}/{model_config}/
     model_save_dir = os.path.join(
         args.output_dir,
         'models',
-        f"{args.dataset_type}_{args.model_config}"
+        dataset_name,
+        args.model_config
     )
     os.makedirs(model_save_dir, exist_ok=True)
     
@@ -188,6 +201,7 @@ def main(args):
     
     train_args = {
         'dataset_type': args.dataset_type,
+        'dataset_name': dataset_name,
         'model_config': args.model_config,
         'n_samples': args.n_samples if hasattr(args, 'n_samples') else None,
         'input_dim': input_dim,
@@ -199,10 +213,12 @@ def main(args):
         'device': args.device
     }
     
+    # Save model (including ONNX export)
     trainer.save_model(
         model_save_path,
         model.get_config(),
-        train_args
+        train_args,
+        save_onnx=True
     )
     
     print(f"\nModel saved to: {model_save_path}")
@@ -211,6 +227,7 @@ def main(args):
     # Return results as JSON for Julia interface
     results = {
         'model_path': model_save_path,
+        'onnx_path': model_save_path.replace('.pt', '.onnx'),
         'best_val_acc': max(trainer.history['val_acc']),
         'train_args': train_args,
         'model_config': model.get_config()

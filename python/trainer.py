@@ -153,7 +153,8 @@ class Trainer:
         self,
         save_path: str,
         config: Dict,
-        train_args: Dict
+        train_args: Dict,
+        save_onnx: bool = True
     ):
         """
         Save model with configuration and training arguments.
@@ -162,6 +163,7 @@ class Trainer:
             save_path: Path to save the model
             config: Model configuration
             train_args: Training arguments
+            save_onnx: Whether to also save as ONNX format
         """
         os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
         
@@ -189,6 +191,32 @@ class Trainer:
         metadata_path = save_path.replace('.pt', '_metadata.json')
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
+        
+        # Save as ONNX format
+        if save_onnx:
+            try:
+                onnx_path = save_path.replace('.pt', '.onnx')
+                self.model.eval()
+                
+                # Create dummy input based on model input dimension
+                input_dim = config.get('input_dim', 784)
+                dummy_input = torch.randn(1, input_dim).to(self.device)
+                
+                # Export to ONNX
+                torch.onnx.export(
+                    self.model,
+                    dummy_input,
+                    onnx_path,
+                    export_params=True,
+                    opset_version=11,
+                    do_constant_folding=True,
+                    input_names=['input'],
+                    output_names=['output'],
+                    dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+                )
+                print(f"Model also saved as ONNX: {onnx_path}")
+            except Exception as e:
+                print(f"Warning: Failed to save ONNX model: {e}")
 
 
 def create_optimizer(

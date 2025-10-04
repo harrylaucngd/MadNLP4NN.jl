@@ -76,8 +76,7 @@ Pkg.instantiate()
 # - PythonCall.jl (for Python integration)
 # - MadNLP.jl (for optimization)
 # - NLPModels.jl (for NLP modeling)
-# - JSON3.jl (for data exchange)
-# - JuMP.jl (for optimization modeling)
+# - JSON3.jl (for data exchange)å
 # - LinearAlgebra.jl (for linear algebra operations)
 
 # Wait for installation to complete (may take a few minutes)

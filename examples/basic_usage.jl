@@ -104,8 +104,8 @@ println("Examples Complete!")
 println("="^80)
 println("""
 Next steps:
-1. Try training with hyperparameter search (see examples/hparam_search.jl)
-2. Train multiple model/dataset combinations (see examples/train_all.jl)
+1. Generate all datasets (see examples/dataset_all.jl)
+2. Train multiple model/dataset combinations (see examples/train_all_parallel.jl)
 3. Implement NLP interface for adversarial optimization (see src/nlp_interface.jl)
 
 For more information, see:

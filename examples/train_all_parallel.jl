@@ -621,6 +621,14 @@ Best Model Overall:
 
 All models saved to: $output_dir/models/
 Complete results: $summary_path
+
+Models are organized as:
+  output/models/{dataset_name}/{model_config}/
+    ├── model_seed{seed}.pt (PyTorch checkpoint)
+    ├── model_seed{seed}.onnx (ONNX format)
+    ├── model_seed{seed}_params.npz (NumPy parameters)
+    ├── model_seed{seed}_metadata.json (Training metadata)
+    └── results_seed{seed}.json (Training results)
 """)
 
 println("="^80)

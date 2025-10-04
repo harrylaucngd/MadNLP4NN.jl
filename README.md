@@ -1,24 +1,29 @@
 # MadNLP4NN.jl
 
-**A Julia/Python framework for adversarial optimization on neural networks using MadNLP**
+**A Julia/Python framework for optimization on neural networks using MadNLP**
 
 ## Overview
 
-MadNLP4NN.jl enables optimization-based adversarial attacks on neural networks by formulating the problem as a nonlinear program (NLP) and solving it with MadNLP, a GPU-accelerated second-order NLP solver.
+MadNLP4NN.jl enables constrained optimization problems involving neural networks by formulating them as nonlinear programs (NLP) and solving with MadNLP, a GPU-accelerated second-order NLP solver.
 
 **Problem Formulation:**
 ```
-maximize  ||f(x; θ) - y||²
-subject to  ||x - x*|| ≤ ε
+minimize  f(x, θ)
+subject to  g(x) ≤ 0
 ```
 
 where:
-- `f(x; θ)` is a trained neural network with parameters θ
-- `x*` is the original input point
-- `y` is the target output
-- `ε` is the perturbation radius
+- `x`: decision variables (optimization inputs)
+- `θ`: neural network parameters (trained model)
+- `f(x, θ)`: objective function using neural network output and x-related expressions
+- `g(x)`: constraint functions (e.g., bounds on x, spherical constraints)
 
-This approach leverages second-order optimization to find adversarial examples more efficiently than traditional gradient-based methods.
+The framework provides:
+- **Modular objective functions**: Combine neural network outputs with custom expressions
+- **Flexible constraints**: Box constraints, spherical constraints, or custom formulations
+- **Smooth optimization**: Handles non-smooth ReLU activations appropriately
+- **Automatic differentiation**: Gradients and Hessians computed via ForwardDiff.jl
+- **Second-order optimization**: Leverages MadNLP's interior-point method for efficiency
 
 ## Features
 
@@ -40,8 +45,10 @@ This approach leverages second-order optimization to find adversarial examples m
 - ✅ **Dataset creation** from Julia
 - ✅ **Model training** from Julia
 - ✅ **Batch processing** for all dataset/model combinations
-- 🚧 **NLP formulation** (placeholder - requires implementation)
-- 🚧 **MadNLP integration** (placeholder - requires implementation)
+- ✅ **NLP formulation** with modular objectives and constraints
+- ✅ **MadNLP integration** with automatic differentiation
+- ✅ **Model loading** from PyTorch to Flux.jl
+- ✅ **Smooth ReLU** handling for differentiability
 
 ## Installation
 
@@ -164,6 +171,66 @@ println("Model architecture: ", config)
 println("Best validation accuracy: ", maximum(history["val_acc"]))
 ```
 
+### Example 5: NLP Optimization with Neural Networks
+
+```julia
+using MadNLP4NN
+
+# Load a trained model
+model_path = "output/models/GM_n10000_d500_c10_comp10_s123/small_mlp/model_seed123.pt"
+
+# Define optimization problem
+input_dim = 500
+output_dim = 10
+
+# Target: minimize distance to class 0
+target = zeros(output_dim)
+target[1] = 1.0
+
+# Initial point
+x0 = randn(input_dim) .* 0.1
+
+# Create NLP with box constraints
+nlp = create_simple_nlp(
+    model_path,
+    target,
+    x0,
+    bounds=(-1.0, 1.0)
+)
+
+# Solve with MadNLP
+result = solve_nlp(nlp, max_iter=100, tol=1e-4)
+
+println("Status: ", result[:status])
+println("Objective: ", result[:objective])
+println("Solution norm: ", norm(result[:solution]))
+```
+
+### Example 6: Custom Objectives and Constraints
+
+```julia
+using MadNLP4NN
+
+# Load model
+model_path = "output/models/dataset/model.pt"
+
+# Create composite objective
+obj = CompositeObjective(
+    NeuralNetworkObjective(target, weight=1.0),
+    QuadraticRegularization(x0, weight=0.01)
+)
+
+# Create composite constraints
+cons = CompositeConstraint(
+    BoxConstraints(fill(-2.0, n), fill(2.0, n)),
+    SphericalConstraint(x0, radius=1.0)
+)
+
+# Create and solve NLP
+nlp = NeuralNetworkNLPModel(model_path, obj, cons, x0)
+result = solve_nlp(nlp)
+```
+
 ## Project Structure
 
 ```
@@ -176,7 +243,8 @@ MadNLP4NN.jl/
 ├── src/
 │   ├── MadNLP4NN.jl        # Main module
 │   ├── python_interface.jl  # Julia → Python interface
-│   └── nlp_interface.jl     # NLP formulation (TODO)
+│   ├── nlp_interface.jl     # Objective/constraint definitions
+│   └── nlp_model.jl         # NLPModels implementation
 ├── python/
 │   ├── requirements.txt     # Python dependencies
 │   ├── dataset_constructor.py  # Dataset generation
@@ -185,8 +253,10 @@ MadNLP4NN.jl/
 │   └── main.py              # Main entry point
 ├── examples/
 │   ├── basic_usage.jl       # Basic examples
-│   ├── train_all.jl         # Train all combinations
-│   └── nlp_optimization.jl  # NLP optimization (TODO)
+│   ├── dataset_all.jl       # Generate all datasets
+│   ├── train_all_parallel.jl # Train all combinations (parallel)
+│   ├── nlp_optimization.jl  # NLP optimization (redirects to evaluation)
+│   └── nlp_evaluation.jl    # Comprehensive NLP evaluation
 └── output/                   # Generated data and models
     ├── datasets/            # Saved datasets
     └── models/              # Saved models
@@ -276,38 +346,74 @@ train_model(
 )
 ```
 
-## NLP Formulation (TODO)
+## NLP Formulation
 
-The next step is to implement the NLP interface that formulates the adversarial problem for MadNLP. See `src/nlp_interface.jl` for detailed implementation hints.
+The NLP interface is now fully implemented! The framework provides a modular approach to defining optimization problems with neural networks.
 
-**Key components needed:**
-1. Neural network forward pass
-2. Objective function: `||f(x; θ) - y||²`
-3. Gradient computation (backpropagation)
-4. Hessian computation (exact or Hessian-vector products)
-5. Constraint implementation (L∞ or L2)
-6. NLPModels.jl integration
-7. MadNLP solver configuration
+### Key Components
 
-**Recommended approach:**
+**1. Model Loading**
+- Converts PyTorch models to Flux.jl format
+- Supports MLP and Residual MLP architectures
+- Preserves trained weights and biases
+
+**2. Smooth ReLU Activation**
+- Uses `smooth_relu(x) = α * log(1 + exp(x/α))` approximation
+- Ensures differentiability everywhere
+- Parameter α controls smoothness (default: 1e-3)
+
+**3. Modular Objective Functions**
+- `NeuralNetworkObjective`: Minimize distance to target output
+- `QuadraticRegularization`: Regularization term
+- `CompositeObjective`: Combine multiple objectives
+- Easy to create custom objectives
+
+**4. Modular Constraint Functions**
+- `BoxConstraints`: Element-wise bounds on x
+- `SphericalConstraint`: L2 ball constraint
+- `CompositeConstraint`: Combine multiple constraints
+- Easy to create custom constraints
+
+**5. Automatic Differentiation**
+- Gradients computed via ForwardDiff.jl
+- Hessians computed via ForwardDiff.jl
+- Supports second-order optimization methods
+
+**6. NLPModels Integration**
+- Full implementation of NLPModels.jl interface
+- Callbacks: `obj`, `grad!`, `cons!`, `jac_coord!`, `hess_coord!`
+- Compatible with all NLPModels-based solvers
+
+**7. MadNLP Solver**
+- Interior-point method for constrained optimization
+- Configurable tolerances and iteration limits
+- Support for different linear solvers
+
+### Usage
+
 ```julia
-# Load trained model
-model_path = "./output/models/mnist_medium_mlp/model_seed42.pt"
+using MadNLP4NN
 
-# Define adversarial problem
-x_star = randn(784)  # Original input
-y_target = randn(10)  # Target output
-epsilon = 0.1  # Perturbation radius
+# Load model
+model_path = "output/models/dataset/model.pt"
 
-# Create NLP model (TO BE IMPLEMENTED)
-nlp = create_adversarial_nlp(model_path, x_star, y_target, epsilon=epsilon)
+# Define objective
+target = zeros(10)
+target[1] = 1.0
+obj = NeuralNetworkObjective(target)
 
-# Solve with MadNLP (TO BE IMPLEMENTED)
-result = solve_adversarial(nlp)
+# Define constraints
+cons = BoxConstraints(fill(-1.0, 500), fill(1.0, 500))
 
-# Get adversarial example
-x_adv = result.solution
+# Create NLP model
+x0 = randn(500) .* 0.1
+nlp = NeuralNetworkNLPModel(model_path, obj, cons, x0)
+
+# Solve
+result = solve_nlp(nlp)
 ```
+
+See `examples/nlp_evaluation.jl` for comprehensive examples.
 
 ## Julia/Python Integration
 
@@ -348,28 +454,39 @@ See `docs/JULIA_PYTHON.md` for detailed integration patterns.
 
 ## Contributing
 
-This project is in active development. Key areas for contribution:
+This project is ready for use and open for contributions. Key areas for enhancement:
 
-1. **NLP Interface Implementation** (Priority!)
-   - Forward pass through saved PyTorch models
-   - Gradient and Hessian computation
-   - NLPModels.jl integration
-   - MadNLP solver configuration
+1. **Additional Objective Functions**
+   - Custom loss functions for specific applications
+   - Multi-objective optimization
+   - Robust optimization objectives
 
-2. **Additional Datasets**
-   - More synthetic distribution types
-   - Support for non-image data
-   - Custom dataset loaders
+2. **Additional Constraint Types**
+   - Non-convex constraints
+   - Probabilistic constraints
+   - Differential constraints
 
 3. **Network Architectures**
-   - Convolutional networks (after NLP interface works)
-   - Other activation functions
+   - Convolutional networks
+   - Attention mechanisms
    - Batch normalization handling
 
 4. **Optimization Enhancements**
-   - Multiple constraint types
-   - Multi-target adversarial examples
-   - Certified adversarial robustness
+   - GPU acceleration for large-scale problems
+   - Sparse Hessian exploitation
+   - Warm-start strategies
+   - Adaptive smoothing parameter for ReLU
+
+5. **Additional Datasets**
+   - More synthetic distribution types
+   - Domain-specific datasets
+   - Custom dataset loaders
+
+6. **Applications**
+   - Adversarial example generation
+   - Input optimization for specific outputs
+   - Certified robustness verification
+   - Neural network interpretability
 
 ## License
 

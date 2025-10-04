@@ -117,6 +117,9 @@ function create_dataset(;
         n_components = get(kwargs, :n_components, 20)
         seed = get(kwargs, :seed, 42)
         
+        # Generate dataset name
+        dataset_name = "GM_n$(n_samples)_d$(input_dim)_c$(output_dim)_comp$(n_components)_s$(seed)"
+        
         dataset = dataset_module.GaussianMixtureDataset(
             n_samples=n_samples,
             input_dim=input_dim,
@@ -125,10 +128,25 @@ function create_dataset(;
             seed=seed
         )
         
+        # Save to output/datasets/gaussian_mixture/GM_...
+        save_dir = joinpath(output_dir, "datasets", "gaussian_mixture")
+        dataset.save(save_dir, dataset_name)
+        
+        @info "Dataset saved to: $(joinpath(save_dir, dataset_name))"
+        
+        # Load and return metadata
+        metadata_file = joinpath(save_dir, dataset_name, "metadata.json")
+        metadata = JSON3.read(read(metadata_file, String))
+        
+        return metadata
+        
     elseif dataset_type == "nonlinear_manifold"
         manifold_dim = get(kwargs, :manifold_dim, 50)
         nonlinearity = get(kwargs, :nonlinearity, "polynomial")
         seed = get(kwargs, :seed, 42)
+        
+        # Generate dataset name
+        dataset_name = "NM_n$(n_samples)_a$(input_dim)_m$(manifold_dim)_c$(output_dim)_$(nonlinearity)_s$(seed)"
         
         dataset = dataset_module.NonlinearManifoldDataset(
             n_samples=n_samples,
@@ -138,6 +156,18 @@ function create_dataset(;
             nonlinearity=nonlinearity,
             seed=seed
         )
+        
+        # Save to output/datasets/nonlinear_manifold/NM_...
+        save_dir = joinpath(output_dir, "datasets", "nonlinear_manifold")
+        dataset.save(save_dir, dataset_name)
+        
+        @info "Dataset saved to: $(joinpath(save_dir, dataset_name))"
+        
+        # Load and return metadata
+        metadata_file = joinpath(save_dir, dataset_name, "metadata.json")
+        metadata = JSON3.read(read(metadata_file, String))
+        
+        return metadata
         
     elseif dataset_type in ["mnist", "fashionmnist", "cifar10"]
         flatten = get(kwargs, :flatten, true)
@@ -153,18 +183,6 @@ function create_dataset(;
     else
         error("Unknown dataset type: $dataset_type")
     end
-    
-    # Save dataset
-    save_dir = joinpath(output_dir, "datasets", dataset_type)
-    dataset.save(save_dir)
-    
-    @info "Dataset saved to: $save_dir"
-    
-    # Load and return metadata
-    metadata_file = joinpath(save_dir, "metadata.json")
-    metadata = JSON3.read(read(metadata_file, String))
-    
-    return metadata
 end
 
 
@@ -239,8 +257,29 @@ function train_model(;
     end
     
     # Load and return results
-    model_save_dir = joinpath(output_dir, "models", "$(dataset_type)_$(model_config)")
+    # Note: The model path structure has changed to {output_dir}/models/{dataset_name}/{model_config}/
+    # We need to construct the dataset_name from the arguments
     seed = get(kwargs, :seed, 42)
+    
+    # Construct dataset name based on type
+    if dataset_type == "gaussian_mixture"
+        n_samples = get(kwargs, :n_samples, 10000)
+        input_dim = get(kwargs, :input_dim, 784)
+        output_dim = get(kwargs, :output_dim, 10)
+        n_components = get(kwargs, :n_components, 20)
+        dataset_name = "GM_n$(n_samples)_d$(input_dim)_c$(output_dim)_comp$(n_components)_s$(seed)"
+    elseif dataset_type == "nonlinear_manifold"
+        n_samples = get(kwargs, :n_samples, 10000)
+        input_dim = get(kwargs, :input_dim, 784)
+        manifold_dim = get(kwargs, :manifold_dim, 50)
+        output_dim = get(kwargs, :output_dim, 10)
+        nonlinearity = get(kwargs, :nonlinearity, "polynomial")
+        dataset_name = "NM_n$(n_samples)_a$(input_dim)_m$(manifold_dim)_c$(output_dim)_$(nonlinearity)_s$(seed)"
+    else
+        dataset_name = dataset_type
+    end
+    
+    model_save_dir = joinpath(output_dir, "models", dataset_name, model_config)
     results_file = joinpath(model_save_dir, "results_seed$(seed).json")
     
     if isfile(results_file)

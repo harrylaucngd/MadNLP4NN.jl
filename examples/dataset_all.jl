@@ -63,16 +63,10 @@ for n_samples in sample_sizes
                     println("\n[$gm_count] Creating: $dataset_name")
                     
                     try
-                        # Create unique output directory for this configuration
-                        # The create_dataset function will append /datasets/gaussian_mixture
-                        unique_output = joinpath(
-                            output_dir,
-                            "GM_n$(n_samples)_d$(input_dim)_c$(output_dim)_comp$(n_components)_s$(seed)"
-                        )
-                        
+                        # Datasets will be saved to output/datasets/gaussian_mixture/{dataset_name}/
                         metadata = create_dataset(
                             dataset_type="gaussian_mixture",
-                            output_dir=unique_output,
+                            output_dir=output_dir,
                             n_samples=n_samples,
                             input_dim=input_dim,
                             output_dim=output_dim,
@@ -143,16 +137,10 @@ for n_samples in sample_sizes
                         println("\n[$nm_count] Creating: $dataset_name")
                         
                         try
-                            # Create unique output directory for this configuration
-                            # The create_dataset function will append /datasets/nonlinear_manifold
-                            unique_output = joinpath(
-                                output_dir,
-                                "NM_n$(n_samples)_a$(ambient_dim)_m$(manifold_dim)_c$(output_dim)_$(nonlinearity)_s$(seed)"
-                            )
-                            
+                            # Datasets will be saved to output/datasets/nonlinear_manifold/{dataset_name}/
                             metadata = create_dataset(
                                 dataset_type="nonlinear_manifold",
-                                output_dir=unique_output,
+                                output_dir=output_dir,
                                 n_samples=n_samples,
                                 input_dim=ambient_dim,
                                 manifold_dim=manifold_dim,
@@ -393,24 +381,33 @@ println("\n" * "="^80)
 println("STORAGE INFORMATION")
 println("="^80)
 
-println("\nAll datasets saved to: $output_dir/")
+println("\nAll datasets saved to: $output_dir/datasets/")
 println("\nDirectory structure:")
 println("  output/")
-println("    ├── GM_n1000_d100_c5_comp10_s42/")
-println("    │   └── datasets/gaussian_mixture/")
-println("    │       ├── data.pt")
-println("    │       ├── labels.pt")
-println("    │       └── metadata.json")
-println("    ├── GM_n1000_d100_c5_comp10_s123/")
-println("    │   └── datasets/gaussian_mixture/...")
-println("    ├── ... (432 Gaussian Mixture configs)")
-println("    ├── NM_n1000_a100_m20_c5_polynomial_s42/")
-println("    │   └── datasets/nonlinear_manifold/...")
-println("    ├── ... (1,188 Nonlinear Manifold configs)")
 println("    ├── datasets/")
-println("    │   ├── mnist/")
+println("    │   ├── cifar10/")
+println("    │   │   ├── metadata.json")
+println("    │   │   └── ... (CIFAR10 data files)")
 println("    │   ├── fashionmnist/")
-println("    │   └── cifar10/")
+println("    │   │   ├── metadata.json")
+println("    │   │   └── ... (FashionMNIST data files)")
+println("    │   ├── mnist/")
+println("    │   │   ├── metadata.json")
+println("    │   │   └── ... (MNIST data files)")
+println("    │   ├── gaussian_mixture/")
+println("    │   │   ├── GM_n10000_d500_c10_comp10_s42/")
+println("    │   │   │   ├── data.pt")
+println("    │   │   │   ├── labels.pt")
+println("    │   │   │   └── metadata.json")
+println("    │   │   ├── GM_n10000_d500_c10_comp20_s42/")
+println("    │   │   └── ... (more GM datasets)")
+println("    │   └── nonlinear_manifold/")
+println("    │       ├── NM_n10000_a500_m20_c10_polynomial_s42/")
+println("    │       │   ├── data.pt")
+println("    │       │   ├── labels.pt")
+println("    │       │   └── metadata.json")
+println("    │       ├── NM_n10000_a500_m20_c10_trigonometric_s42/")
+println("    │       └── ... (more NM datasets)")
 println("    └── dataset_manifest.json")
 
 # =============================================================================
@@ -425,7 +422,7 @@ println("""
 Now that you have generated all datasets, you can:
 
 1. Train models on these datasets:
-   julia examples/train_all.jl
+   julia examples/train_all_parallel.jl
 
 2. Train specific combinations:
    julia> using MadNLP4NN
