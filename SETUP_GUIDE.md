@@ -33,8 +33,11 @@ conda activate madnlp4nn
 # Install PyTorch with CUDA (if you have GPU)
 conda install pytorch torchvision pytorch-cuda=11.8 -c pytorch -c nvidia
 
-# Install other dependencies
+# Install other dependencies (including JAX for dual backend support)
 pip install -r python/requirements.txt
+
+# Note: requirements.txt includes JAX for the Python/JAX backend option
+# If you only want to use the Julia/Flux backend, JAX is optional
 
 # Note the Python path for later
 which python
@@ -241,6 +244,65 @@ python_dir = joinpath(@__DIR__, "python")
 pylist(sys.path).insert(0, python_dir)
 ```
 
+## Dual Backend Support (Julia/Flux vs Python/JAX)
+
+MadNLP4NN supports two backends for neural network evaluation and automatic differentiation:
+
+### Backend 1: Julia/Flux (Default)
+- **Inference**: Flux.jl
+- **Derivatives**: ForwardDiff.jl
+- **Pros**: Pure Julia, no Python dependency for optimization
+- **Usage**: Default, no special flags needed
+
+### Backend 2: Python/JAX (Optional)
+- **Inference**: JAX (Python)
+- **Derivatives**: JAX automatic differentiation
+- **Pros**: Cross-validation, GPU support via JAX
+- **Usage**: Add `use_python=true` flag
+
+**Both backends use the same MadNLP solver in Julia!**
+
+### Example: Choosing Backend
+
+```julia
+using MadNLP4NN
+
+model_path = "output/models/dataset/model.pt"
+target = [1.0, 0.0, 0.0, ...]
+x0 = randn(500)
+
+# Option 1: Julia/Flux backend (default)
+nlp_flux = create_simple_nlp(
+    model_path, target, x0,
+    bounds=(-1, 1),
+    use_python=false  # or omit (default)
+)
+
+# Option 2: Python/JAX backend
+nlp_jax = create_simple_nlp(
+    model_path, target, x0,
+    bounds=(-1, 1),
+    use_python=true  # Use JAX!
+)
+
+# Both solve with MadNLP
+result_flux = solve_nlp(nlp_flux)
+result_jax = solve_nlp(nlp_jax)
+```
+
+### When to Use Each Backend?
+
+**Use Julia/Flux (default) when:**
+- You want pure Julia workflow
+- You don't need to validate derivatives
+- You're comfortable with the Julia ecosystem
+
+**Use Python/JAX when:**
+- You want to cross-validate with Julia implementation
+- You need GPU acceleration via JAX
+- You want to compare ForwardDiff vs JAX AD performance
+- You're more comfortable with Python for debugging
+
 ## Next Steps
 
 Once setup is complete:
@@ -250,12 +312,17 @@ Once setup is complete:
    julia examples/basic_usage.jl
    ```
 
-2. **Read the tutorial:**
+2. **Try NLP optimization:**
+   ```bash
+   julia examples/nlp_evaluation.jl
+   ```
+
+3. **Read the tutorial:**
    ```bash
    cat docs/TUTORIAL.md
    ```
 
-3. **Train your first model:**
+4. **Train your first model:**
    ```julia
    using MadNLP4NN
    
@@ -266,12 +333,16 @@ Once setup is complete:
    )
    ```
 
-4. **Start implementing the NLP interface** (see `src/nlp_interface.jl`)
+5. **Try both backends:**
+   ```julia
+   # See Example 5 and 6 in README.md
+   ```
 
 ## Getting Help
 
 - Check the documentation in `docs/`
 - Review examples in `examples/`
-- Read the detailed implementation hints in `src/nlp_interface.jl`
+- See README.md for dual backend examples
+- Check PROJECT_SUMMARY.md for detailed feature list
 
 Happy coding! 🚀

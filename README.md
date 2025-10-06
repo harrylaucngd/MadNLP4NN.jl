@@ -22,7 +22,8 @@ The framework provides:
 - **Modular objective functions**: Combine neural network outputs with custom expressions
 - **Flexible constraints**: Box constraints, spherical constraints, or custom formulations
 - **Smooth optimization**: Handles non-smooth ReLU activations appropriately
-- **Automatic differentiation**: Gradients and Hessians computed via ForwardDiff.jl
+- **Dual backend support**: Choose between Julia/Flux or Python/JAX for NN evaluation and derivatives
+- **Automatic differentiation**: Gradients and Hessians computed via ForwardDiff.jl or JAX
 - **Second-order optimization**: Leverages MadNLP's interior-point method for efficiency
 
 ## Features
@@ -47,7 +48,10 @@ The framework provides:
 - ✅ **Batch processing** for all dataset/model combinations
 - ✅ **NLP formulation** with modular objectives and constraints
 - ✅ **MadNLP integration** with automatic differentiation
-- ✅ **Model loading** from PyTorch to Flux.jl
+- ✅ **Dual backend support**:
+  - **Flux + ForwardDiff** (default): Pure Julia implementation
+  - **JAX + JAX AD** (optional): Python/JAX for NN evaluation and derivatives
+- ✅ **Model loading** from PyTorch to Flux.jl or JAX
 - ✅ **Smooth ReLU** handling for differentiability
 
 ## Installation
@@ -190,7 +194,7 @@ target[1] = 1.0
 # Initial point
 x0 = randn(input_dim) .* 0.1
 
-# Create NLP with box constraints
+# Create NLP with box constraints (default: Julia/Flux backend)
 nlp = create_simple_nlp(
     model_path,
     target,
@@ -206,7 +210,39 @@ println("Objective: ", result[:objective])
 println("Solution norm: ", norm(result[:solution]))
 ```
 
-### Example 6: Custom Objectives and Constraints
+### Example 6: Using Python/JAX Backend
+
+```julia
+using MadNLP4NN
+
+# Same problem as Example 5, but using Python/JAX for NN evaluation
+model_path = "output/models/GM_n10000_d500_c10_comp10_s123/small_mlp/model_seed123.pt"
+
+target = zeros(10)
+target[1] = 1.0
+x0 = randn(500) .* 0.1
+
+# Create NLP with Python/JAX backend
+nlp_jax = create_simple_nlp(
+    model_path,
+    target,
+    x0,
+    bounds=(-1.0, 1.0),
+    use_python=true  # Use JAX for NN evaluation and derivatives!
+)
+
+# Solve with MadNLP (same solver, different evaluation backend)
+result_jax = solve_nlp(nlp_jax, max_iter=100, tol=1e-4)
+
+println("JAX Backend - Status: ", result_jax[:status])
+println("JAX Backend - Objective: ", result_jax[:objective])
+```
+
+**Note**: Both backends use the same MadNLP solver. The only difference is how neural network evaluations and derivatives are computed:
+- **Flux backend** (default): Uses Flux.jl for inference and ForwardDiff.jl for derivatives
+- **JAX backend** (`use_python=true`): Uses JAX (Python) for inference and JAX AD for derivatives
+
+### Example 7: Custom Objectives and Constraints
 
 ```julia
 using MadNLP4NN
