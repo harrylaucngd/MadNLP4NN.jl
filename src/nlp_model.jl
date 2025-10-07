@@ -284,6 +284,14 @@ function NLPModels.grad!(nlp::NeuralNetworkNLPModel, x::AbstractVector, g::Abstr
         # Use Python/JAX backend
         g_py = nlp.python_evaluator.evaluate_grad(x)
         g .= pyconvert(Vector{Float64}, g_py)
+        
+        # Check for invalid values
+        if any(isnan.(g)) || any(isinf.(g))
+            @warn "Gradient contains NaN or Inf values! This will cause solver failure."
+            @warn "  NaN count: $(sum(isnan.(g)))"
+            @warn "  Inf count: $(sum(isinf.(g)))"
+        end
+        
         return g
     else
         # Use ForwardDiff for gradient computation
@@ -545,7 +553,9 @@ function solve_nlp(
     
     # Extract solution information
     status = result.status
-    solution = copy(result.solution)
+    # Extract only primal variables (not dual variables)
+    # MadNLP's result.solution contains [x; y] where x are primal and y are dual
+    solution = copy(result.solution[1:nlp.meta.nvar])
     objective = result.objective
     iter_count = result.iter
     
@@ -555,7 +565,7 @@ function solve_nlp(
     
     return Dict(
         :status => status,
-        :solution => solution,
+        :solution => solution,  # Only primal variables
         :objective => objective,
         :iter_count => iter_count,
         :nlp_model => nlp

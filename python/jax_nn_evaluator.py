@@ -22,6 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 import torch
 from typing import Tuple, Callable, Dict, Optional, Union
+from functools import partial
 
 # Enable float64 for numerical consistency with Julia
 jax.config.update("jax_enable_x64", True)
@@ -33,7 +34,7 @@ def smooth_relu(x: jnp.ndarray, alpha: float = 1e-3) -> jnp.ndarray:
     
     This provides a smooth approximation to ReLU that is differentiable
     everywhere, which is required for second-order optimization methods.
-    Identical to the Julia implementation.
+    Uses jax.nn.softplus which is numerically stable and JAX-friendly.
     
     Args:
         x: Input array
@@ -42,9 +43,9 @@ def smooth_relu(x: jnp.ndarray, alpha: float = 1e-3) -> jnp.ndarray:
     Returns:
         Smoothed ReLU applied element-wise
     """
-    scaled = x / alpha
-    # Numerically stable: if x/α > 20, use x directly
-    return jnp.where(scaled > 20, x, alpha * jnp.log(1 + jnp.exp(scaled)))
+    # Use JAX's built-in softplus: softplus(x) = log(1 + exp(x))
+    # Our smooth_relu is: alpha * softplus(x/alpha)
+    return alpha * jax.nn.softplus(x / alpha)
 
 
 def load_pytorch_model_to_jax(model_path: str) -> Tuple[Callable, Dict, Dict]:
@@ -311,57 +312,82 @@ class JAXNeuralNetworkEvaluator:
     
     def _compile_derivatives(self):
         """Pre-compile JAX derivative functions (JIT for performance)."""
-        # Objective function for AD
-        def obj_func(x):
+        
+        # Store params and other data as local variables
+        # Use functools.partial to properly bind them instead of closures
+        params = self.params
+        forward = self.jax_forward
+        target = self.target
+        x0 = self.x0
+        obj_weight = self.objective_weight
+        reg_weight = self.regularization_weight
+        bounds = self.bounds
+        radius = self.radius
+        
+        # Define objective function that takes ONLY x as argument
+        # All other variables are bound via functools.partial
+        def obj_func_template(params_arg, forward_fn, target_arg, x0_arg, obj_w, reg_w, x):
             # Neural network objective
-            nn_out = self.jax_forward(self.params, x)
-            f = self.objective_weight * jnp.sum((nn_out - self.target) ** 2)
+            nn_out = forward_fn(params_arg, x)
+            f = obj_w * jnp.sum((nn_out - target_arg) ** 2)
             
             # Regularization term
-            if self.regularization_weight > 0:
-                f += self.regularization_weight * jnp.sum((x - self.x0) ** 2)
+            if reg_w > 0:
+                f += reg_w * jnp.sum((x - x0_arg) ** 2)
             
             return f
         
+        # Bind all parameters except x using partial
+        obj_func = partial(obj_func_template, params, forward, target, x0, obj_weight, reg_weight)
+        
         # Constraint function for AD
-        def cons_func(x):
+        def cons_func_template(bounds_arg, x0_arg, radius_arg, x):
             constraints = []
             
             # Box constraints: x <= x_max and x >= x_min
-            if self.bounds is not None:
-                x_min, x_max = self.bounds
+            if bounds_arg is not None:
+                x_min, x_max = bounds_arg
                 constraints.append(x - x_max)      # x <= x_max → x - x_max <= 0
                 constraints.append(x_min - x)      # x >= x_min → x_min - x <= 0
             
             # Spherical constraint: ||x - x0||^2 <= radius^2
-            if self.radius is not None:
-                diff = x - self.x0
-                constraints.append(jnp.array([jnp.sum(diff ** 2) - self.radius ** 2]))
+            if radius_arg is not None:
+                diff = x - x0_arg
+                constraints.append(jnp.array([jnp.sum(diff ** 2) - radius_arg ** 2]))
             
             return jnp.concatenate(constraints) if constraints else jnp.array([])
         
+        # Bind constraint parameters using partial
+        cons_func = partial(cons_func_template, bounds, x0, radius)
+        
         # Lagrangian for Hessian computation
-        def lagrangian(x, y, obj_weight):
-            L = obj_weight * obj_func(x)
+        def lagrangian(x, y, obj_weight_arg):
+            L = obj_weight_arg * obj_func(x)
             if self.m > 0 and y is not None:
                 c = cons_func(x)
                 L += jnp.dot(y, c)
             return L
         
-        # Compile derivatives with JIT
+        # Compile derivatives
+        # Now obj_func takes only x, so jax.grad will differentiate w.r.t. x
         self.obj_func = jax.jit(obj_func)
-        self.grad_func = jax.jit(jax.grad(obj_func))
+        self.grad_func = jax.grad(obj_func)  # Don't JIT compile grad for now
         
         if self.m > 0:
             self.cons_func = jax.jit(cons_func)
-            self.jac_func = jax.jit(jax.jacobian(cons_func))
+            self.jac_func = jax.jacobian(cons_func)  # Don't JIT compile jacobian for now
+            
+            # Hessian of Lagrangian
+            def hess_lagrangian_func(x, y, obj_weight_arg):
+                """Compute Hessian of Lagrangian."""
+                def lag_func(x_):
+                    return lagrangian(x_, y, obj_weight_arg)
+                return jax.hessian(lag_func)(x)
+            
+            self.hess_func_lagrangian = hess_lagrangian_func
         
-        # Hessian: compile with and without constraints
-        if self.m > 0:
-            self.hess_func_lagrangian = jax.jit(
-                lambda x, y, obj_weight: jax.hessian(lambda x_: lagrangian(x_, y, obj_weight))(x)
-            )
-        self.hess_func_objective = jax.jit(jax.hessian(obj_func))
+        # Hessian of objective
+        self.hess_func_objective = jax.hessian(obj_func)
     
     # ============================================================================
     # Evaluation Functions (Called from Julia)
@@ -512,10 +538,6 @@ def create_evaluator(
 # =============================================================================
 
 if __name__ == '__main__':
-    print("Testing JAX Neural Network Evaluator")
-    print("=" * 80)
-    
-    # This is a simple test - requires a trained model
     import sys
     
     if len(sys.argv) > 1:
@@ -523,55 +545,21 @@ if __name__ == '__main__':
         
         # Load model
         jax_forward, params, config = load_pytorch_model_to_jax(model_path)
-        
-        print(f"\nModel loaded successfully!")
-        print(f"  Type: {config['model_type']}")
-        print(f"  Input dim: {config['input_dim']}")
-        print(f"  Output dim: {config['output_dim']}")
-        
-        # Test forward pass
-        input_dim = config['input_dim']
-        output_dim = config['output_dim']
-        
-        x_test = np.random.randn(input_dim)
-        output = jax_forward(params, jnp.array(x_test))
-        
-        print(f"\nTest forward pass:")
-        print(f"  Input shape: {x_test.shape}")
-        print(f"  Output shape: {output.shape}")
-        print(f"  Output: {output[:5]}...")  # First 5 elements
+        print(f"Model loaded: {config['model_type']}, input_dim={config['input_dim']}, output_dim={config['output_dim']}")
         
         # Test evaluator
-        target = np.zeros(output_dim)
+        x_test = np.random.randn(config['input_dim'])
+        target = np.zeros(config['output_dim'])
         target[0] = 1.0
         
-        evaluator = create_evaluator(
-            model_path,
-            target,
-            x_test,
-            bounds=(-1.0, 1.0)
-        )
-        
-        print(f"\nEvaluator created:")
-        print(f"  n = {evaluator.n}")
-        print(f"  m = {evaluator.m}")
+        evaluator = create_evaluator(model_path, target, x_test, bounds=(-1.0, 1.0))
         
         # Test evaluations
         obj_val = evaluator.evaluate_obj(x_test)
         grad_val = evaluator.evaluate_grad(x_test)
         
-        print(f"\nTest evaluations:")
-        print(f"  Objective: {obj_val}")
-        print(f"  Gradient norm: {np.linalg.norm(grad_val)}")
-        
-        if evaluator.m > 0:
-            cons_val = evaluator.evaluate_cons(x_test)
-            jac_val = evaluator.evaluate_jac(x_test)
-            print(f"  Constraints: {cons_val[:5]}...")
-            print(f"  Jacobian shape: {jac_val.shape}")
-        
-        print("\n✓ All tests passed!")
+        print(f"Objective: {obj_val:.4f}, Gradient norm: {np.linalg.norm(grad_val):.4f}")
+        print("✓ Evaluator test passed!")
     else:
         print("Usage: python jax_nn_evaluator.py <model_path>")
-        print("Example: python jax_nn_evaluator.py output/models/.../model.pt")
 

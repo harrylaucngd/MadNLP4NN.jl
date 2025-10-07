@@ -77,8 +77,7 @@ Fully functional Julia functions:
 - ✅ `basic_usage.jl`: Create datasets, train models, load models
 - ✅ `dataset_all.jl`: Generate all dataset configurations
 - ✅ `train_all_parallel.jl`: Batch training all combinations (with parallel processing)
-- ✅ `nlp_optimization.jl`: Redirects to comprehensive evaluation
-- ✅ `nlp_evaluation.jl`: Comprehensive NLP optimization examples (NEW!)
+- ✅ `nlp_evaluation.jl`: Comprehensive NLP optimization examples
 
 #### 6. **Project Configuration**
 
@@ -149,7 +148,7 @@ MadNLP4NN.jl/
 ├── src/                     # Julia source code
 │   ├── MadNLP4NN.jl        # Main module (exports all functions)
 │   ├── python_interface.jl  # ✅ Complete Julia→Python interface
-│   └── nlp_interface.jl     # 🚧 TODO: NLP formulation
+│   └── nlp_interface.jl     # ✅ NLP formulation
 │
 ├── python/                  # Python source code
 │   ├── requirements.txt     # ✅ Python dependencies (including JAX)
@@ -167,7 +166,7 @@ MadNLP4NN.jl/
 │   ├── basic_usage.jl       # ✅ Basic examples
 │   ├── dataset_all.jl       # ✅ Generate all datasets
 │   ├── train_all_parallel.jl # ✅ Batch training (parallel)
-│   └── nlp_optimization.jl  # 🚧 NLP example (placeholder)
+│   └── nlp_evaluation.jl  # ✅ NLP solving
 │
 └── output/                  # Generated data (created at runtime)
     ├── datasets/            # Saved datasets
@@ -417,7 +416,6 @@ grad!(nlp, x0, grad_exact)
 - `examples/basic_usage.jl`: Start here
 - `examples/dataset_all.jl`: Generate all datasets
 - `examples/train_all_parallel.jl`: Batch training (parallel)
-- `examples/nlp_optimization.jl`: Planned NLP workflow
 
 ### External Resources
 - [PythonCall.jl](https://cjdoris.github.io/PythonCall.jl/)

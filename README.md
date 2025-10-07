@@ -291,7 +291,6 @@ MadNLP4NN.jl/
 │   ├── basic_usage.jl       # Basic examples
 │   ├── dataset_all.jl       # Generate all datasets
 │   ├── train_all_parallel.jl # Train all combinations (parallel)
-│   ├── nlp_optimization.jl  # NLP optimization (redirects to evaluation)
 │   └── nlp_evaluation.jl    # Comprehensive NLP evaluation
 └── output/                   # Generated data and models
     ├── datasets/            # Saved datasets
