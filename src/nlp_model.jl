@@ -10,6 +10,40 @@ using ForwardDiff
 using LinearAlgebra
 
 # ============================================================================
+# Timing Statistics
+# ============================================================================
+
+"""
+    TimingStats
+
+Mutable struct to track timing statistics during optimization.
+
+# Fields
+- `total_eval_time`: Total time spent in evaluation callbacks (objective, gradient, constraints, Jacobian, Hessian)
+- `eval_count`: Total number of evaluation calls
+- `per_iteration_times`: Vector of eval times per iteration (approximated by tracking evaluation calls)
+- `iteration_start_time`: Time when current iteration started
+"""
+mutable struct TimingStats
+    total_eval_time::Float64
+    eval_count::Int
+    per_iteration_times::Vector{Float64}
+    iteration_start_time::Float64
+    
+    TimingStats() = new(0.0, 0, Float64[], time())
+end
+
+"""
+Record evaluation time in timing stats.
+"""
+function record_eval_time!(stats::TimingStats, elapsed::Float64)
+    stats.total_eval_time += elapsed
+    stats.eval_count += 1
+    # Store per-iteration time (each call is approximately one iteration's evaluation)
+    push!(stats.per_iteration_times, elapsed)
+end
+
+# ============================================================================
 # NLP Model with Neural Network
 # ============================================================================
 
@@ -33,6 +67,7 @@ Both backends use the same MadNLP solver for optimization.
 - `x0`: Initial point
 - `use_python`: If true, use Python/JAX backend; if false, use Flux/ForwardDiff
 - `python_evaluator`: Python JAX evaluator (only used if use_python=true)
+- `timing_stats`: Timing statistics for performance analysis
 """
 mutable struct NeuralNetworkNLPModel <: AbstractNLPModel{Float64, Vector{Float64}}
     meta::NLPModelMeta{Float64, Vector{Float64}}
@@ -43,6 +78,7 @@ mutable struct NeuralNetworkNLPModel <: AbstractNLPModel{Float64, Vector{Float64
     x0::Vector{Float64}
     use_python::Bool  # Whether to use Python/JAX backend
     python_evaluator::Union{Py, Nothing}  # Python evaluator (or nothing if using Flux)
+    timing_stats::TimingStats  # Timing statistics
 end
 
 
@@ -122,6 +158,7 @@ function _create_flux_nlp_model(
     )
     
     counters = Counters()
+    timing_stats = TimingStats()
     
     return NeuralNetworkNLPModel(
         meta,
@@ -131,7 +168,8 @@ function _create_flux_nlp_model(
         constraint_func,
         copy(x0),
         false,    # use_python = false
-        nothing   # python_evaluator = nothing
+        nothing,  # python_evaluator = nothing
+        timing_stats
     )
 end
 
@@ -233,6 +271,7 @@ function _create_python_nlp_model(
     )
     
     counters = Counters()
+    timing_stats = TimingStats()
     
     return NeuralNetworkNLPModel(
         meta,
@@ -242,7 +281,8 @@ function _create_python_nlp_model(
         constraint_func,
         copy(x0),
         true,     # use_python = true
-        py_eval   # python_evaluator
+        py_eval,  # python_evaluator
+        timing_stats
     )
 end
 
@@ -259,16 +299,19 @@ Evaluate objective function at x.
 function NLPModels.obj(nlp::NeuralNetworkNLPModel, x::AbstractVector)
     NLPModels.increment!(nlp, :neval_obj)
     
-    if nlp.use_python
-        # Use Python/JAX backend
-        f = pyconvert(Float64, nlp.python_evaluator.evaluate_obj(x))
-        return f
-    else
-        # Use Flux backend
-        nn_output = nlp.neural_network(x)
-        f = evaluate(nlp.objective_func, x, nn_output)
-        return f
+    eval_time = @elapsed begin
+        if nlp.use_python
+            # Use Python/JAX backend
+            f = pyconvert(Float64, nlp.python_evaluator.evaluate_obj(x))
+        else
+            # Use Flux backend
+            nn_output = nlp.neural_network(x)
+            f = evaluate(nlp.objective_func, x, nn_output)
+        end
     end
+    
+    record_eval_time!(nlp.timing_stats, eval_time)
+    return f
 end
 
 
@@ -280,27 +323,29 @@ Evaluate objective gradient at x using automatic differentiation.
 function NLPModels.grad!(nlp::NeuralNetworkNLPModel, x::AbstractVector, g::AbstractVector)
     NLPModels.increment!(nlp, :neval_grad)
     
-    if nlp.use_python
-        # Use Python/JAX backend
-        g_py = nlp.python_evaluator.evaluate_grad(x)
-        g .= pyconvert(Vector{Float64}, g_py)
-        
-        # Check for invalid values
-        if any(isnan.(g)) || any(isinf.(g))
-            @warn "Gradient contains NaN or Inf values! This will cause solver failure."
-            @warn "  NaN count: $(sum(isnan.(g)))"
-            @warn "  Inf count: $(sum(isinf.(g)))"
+    eval_time = @elapsed begin
+        if nlp.use_python
+            # Use Python/JAX backend
+            g_py = nlp.python_evaluator.evaluate_grad(x)
+            g .= pyconvert(Vector{Float64}, g_py)
+            
+            # Check for invalid values
+            if any(isnan.(g)) || any(isinf.(g))
+                @warn "Gradient contains NaN or Inf values! This will cause solver failure."
+                @warn "  NaN count: $(sum(isnan.(g)))"
+                @warn "  Inf count: $(sum(isinf.(g)))"
+            end
+        else
+            # Use ForwardDiff for gradient computation
+            g .= ForwardDiff.gradient(x_val -> begin
+                nn_output = nlp.neural_network(x_val)
+                evaluate(nlp.objective_func, x_val, nn_output)
+            end, x)
         end
-        
-        return g
-    else
-        # Use ForwardDiff for gradient computation
-        g .= ForwardDiff.gradient(x_val -> begin
-            nn_output = nlp.neural_network(x_val)
-            evaluate(nlp.objective_func, x_val, nn_output)
-        end, x)
-        return g
     end
+    
+    record_eval_time!(nlp.timing_stats, eval_time)
+    return g
 end
 
 
@@ -312,22 +357,24 @@ Evaluate constraint functions at x.
 function NLPModels.cons!(nlp::NeuralNetworkNLPModel, x::AbstractVector, c::AbstractVector)
     NLPModels.increment!(nlp, :neval_cons)
     
-    if nlp.use_python
-        # Use Python/JAX backend
-        if nlp.meta.ncon > 0
-            c_py = nlp.python_evaluator.evaluate_cons(x)
-            c .= pyconvert(Vector{Float64}, c_py)
+    eval_time = @elapsed begin
+        if nlp.use_python
+            # Use Python/JAX backend
+            if nlp.meta.ncon > 0
+                c_py = nlp.python_evaluator.evaluate_cons(x)
+                c .= pyconvert(Vector{Float64}, c_py)
+            end
+        else
+            # Use Flux backend
+            if nlp.constraint_func !== nothing
+                c_vals = evaluate(nlp.constraint_func, x)
+                c .= c_vals
+            end
         end
-        return c
-    else
-        # Use Flux backend
-        if nlp.constraint_func === nothing
-            return c
-        end
-        c_vals = evaluate(nlp.constraint_func, x)
-        c .= c_vals
-        return c
     end
+    
+    record_eval_time!(nlp.timing_stats, eval_time)
+    return c
 end
 
 
@@ -373,42 +420,45 @@ function NLPModels.jac_coord!(
         return vals
     end
     
-    if nlp.use_python
-        # Use Python/JAX backend
-        J_py = nlp.python_evaluator.evaluate_jac(x)
-        J = pyconvert(Matrix{Float64}, J_py)
-        
-        # Fill vals in row-major order
-        idx = 1
-        for i in 1:nlp.meta.ncon
-            for j in 1:nlp.meta.nvar
-                vals[idx] = J[i, j]
-                idx += 1
+    eval_time = @elapsed begin
+        if nlp.use_python
+            # Use Python/JAX backend
+            J_py = nlp.python_evaluator.evaluate_jac(x)
+            J = pyconvert(Matrix{Float64}, J_py)
+            
+            # Fill vals in row-major order
+            idx = 1
+            for i in 1:nlp.meta.ncon
+                for j in 1:nlp.meta.nvar
+                    vals[idx] = J[i, j]
+                    idx += 1
+                end
+            end
+        else
+            # Use ForwardDiff
+            jac_func = x_val -> begin
+                T = eltype(x_val)
+                c = zeros(T, nlp.meta.ncon)
+                c_vals = evaluate(nlp.constraint_func, x_val)
+                c .= c_vals
+                return c
+            end
+            
+            J = ForwardDiff.jacobian(jac_func, x)
+            
+            # Fill vals in row-major order
+            idx = 1
+            for i in 1:nlp.meta.ncon
+                for j in 1:nlp.meta.nvar
+                    vals[idx] = J[i, j]
+                    idx += 1
+                end
             end
         end
-        return vals
-    else
-        # Use ForwardDiff
-        jac_func = x_val -> begin
-            T = eltype(x_val)
-            c = zeros(T, nlp.meta.ncon)
-            c_vals = evaluate(nlp.constraint_func, x_val)
-            c .= c_vals
-            return c
-        end
-        
-        J = ForwardDiff.jacobian(jac_func, x)
-        
-        # Fill vals in row-major order
-        idx = 1
-        for i in 1:nlp.meta.ncon
-            for j in 1:nlp.meta.nvar
-                vals[idx] = J[i, j]
-                idx += 1
-            end
-        end
-        return vals
     end
+    
+    record_eval_time!(nlp.timing_stats, eval_time)
+    return vals
 end
 
 
@@ -455,59 +505,62 @@ function NLPModels.hess_coord!(
 )
     NLPModels.increment!(nlp, :neval_hess)
     
-    if nlp.use_python
-        # Use Python/JAX backend
-        H_py = nlp.python_evaluator.evaluate_hess(x, y, obj_weight)
-        H = pyconvert(Matrix{Float64}, H_py)
-        
-        # Extract lower triangle
-        idx = 1
-        n = nlp.meta.nvar
-        for j in 1:n
-            for i in j:n
-                vals[idx] = H[i, j]
-                idx += 1
+    eval_time = @elapsed begin
+        if nlp.use_python
+            # Use Python/JAX backend
+            H_py = nlp.python_evaluator.evaluate_hess(x, y, obj_weight)
+            H = pyconvert(Matrix{Float64}, H_py)
+            
+            # Extract lower triangle
+            idx = 1
+            n = nlp.meta.nvar
+            for j in 1:n
+                for i in j:n
+                    vals[idx] = H[i, j]
+                    idx += 1
+                end
             end
-        end
-        return vals
-    else
-        # Use ForwardDiff
-        # Compute Hessian of objective
-        obj_func = x_val -> begin
-            nn_output = nlp.neural_network(x_val)
-            evaluate(nlp.objective_func, x_val, nn_output)
-        end
-        hess_obj = ForwardDiff.hessian(obj_func, x)
-        
-        # Initialize Lagrangian Hessian
-        hess_lag = obj_weight .* hess_obj
-        
-        # Add constraint Hessians
-        if nlp.meta.ncon > 0 && any(y .!= 0)
-            for i in 1:nlp.meta.ncon
-                if y[i] != 0
-                    # Compute Hessian of constraint i
-                    cons_i_func = x_val -> begin
-                        c_vals = evaluate(nlp.constraint_func, x_val)
-                        return c_vals[i]
+        else
+            # Use ForwardDiff
+            # Compute Hessian of objective
+            obj_func = x_val -> begin
+                nn_output = nlp.neural_network(x_val)
+                evaluate(nlp.objective_func, x_val, nn_output)
+            end
+            hess_obj = ForwardDiff.hessian(obj_func, x)
+            
+            # Initialize Lagrangian Hessian
+            hess_lag = obj_weight .* hess_obj
+            
+            # Add constraint Hessians
+            if nlp.meta.ncon > 0 && any(y .!= 0)
+                for i in 1:nlp.meta.ncon
+                    if y[i] != 0
+                        # Compute Hessian of constraint i
+                        cons_i_func = x_val -> begin
+                            c_vals = evaluate(nlp.constraint_func, x_val)
+                            return c_vals[i]
+                        end
+                        hess_ci = ForwardDiff.hessian(cons_i_func, x)
+                        hess_lag .+= y[i] .* hess_ci
                     end
-                    hess_ci = ForwardDiff.hessian(cons_i_func, x)
-                    hess_lag .+= y[i] .* hess_ci
+                end
+            end
+            
+            # Extract lower triangle
+            idx = 1
+            n = nlp.meta.nvar
+            for j in 1:n
+                for i in j:n
+                    vals[idx] = hess_lag[i, j]
+                    idx += 1
                 end
             end
         end
-        
-        # Extract lower triangle
-        idx = 1
-        n = nlp.meta.nvar
-        for j in 1:n
-            for i in j:n
-                vals[idx] = hess_lag[i, j]
-                idx += 1
-            end
-        end
-        return vals
     end
+    
+    record_eval_time!(nlp.timing_stats, eval_time)
+    return vals
 end
 
 
@@ -563,12 +616,16 @@ function solve_nlp(
     @info "  Objective: $objective"
     @info "  Iterations: $iter_count"
     
+    # Extract timing statistics
+    timing_stats = nlp.timing_stats
+    
     return Dict(
         :status => status,
         :solution => solution,  # Only primal variables
         :objective => objective,
         :iter_count => iter_count,
-        :nlp_model => nlp
+        :nlp_model => nlp,
+        :timing_stats => timing_stats
     )
 end
 

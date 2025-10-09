@@ -27,6 +27,14 @@ from functools import partial
 # Enable float64 for numerical consistency with Julia
 jax.config.update("jax_enable_x64", True)
 
+# Enable deterministic operations for reproducibility
+# This ensures that operations like reductions are deterministic
+jax.config.update("jax_default_matmul_precision", "highest")
+
+# Disable JIT compilation randomness (if needed)
+# Note: JAX operations are deterministic by default when given the same inputs
+# and random seeds, but this ensures platform consistency
+
 
 def smooth_relu(x: jnp.ndarray, alpha: float = 1e-3) -> jnp.ndarray:
     """

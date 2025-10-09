@@ -35,7 +35,7 @@ println()
 # -----------------------------------------------------------------------------
 # Model Configuration
 # -----------------------------------------------------------------------------
-const MODEL_PATH = "output/models/cifar10/large_mlp/model_seed123.pt"
+const MODEL_PATH = "output/models/mnist/small_mlp/model_seed42.pt"
 # Alternative examples:
 # const MODEL_PATH = "output/models/mnist/small_mlp/model_seed42.pt"
 # const MODEL_PATH = "output/models/fashionmnist/medium_mlp/model_seed123.pt"
@@ -76,12 +76,12 @@ const CUSTOM_INIT = nothing  # For "custom" type, provide Vector{Float64}
 # Constraint Parameters
 # -----------------------------------------------------------------------------
 # Box constraints
-const BOX_LOWER = -1.0  # Lower bound for all variables
-const BOX_UPPER = 1.0   # Upper bound for all variables
+const BOX_LOWER = -100.0  # Lower bound for all variables
+const BOX_UPPER = 100.0   # Upper bound for all variables
 const CUSTOM_BOX_BOUNDS = nothing  # Custom bounds: (x_min::Vector, x_max::Vector) or nothing
 
 # Spherical constraints
-const SPHERE_RADIUS = 0.5  # Radius for spherical constraint
+const SPHERE_RADIUS = 50.0  # Radius for spherical constraint
 const SPHERE_CENTER = nothing  # Center point (nothing = use initial point)
 
 # -----------------------------------------------------------------------------
@@ -99,7 +99,7 @@ const CUSTOM_REG_WEIGHT = 0.01  # Weight for regularization term
 # -----------------------------------------------------------------------------
 # Solver Parameters
 # -----------------------------------------------------------------------------
-const MAX_ITER = 100  # Maximum number of iterations
+const MAX_ITER = 1000  # Maximum number of iterations
 const TOLERANCE = 1e-4  # Convergence tolerance
 const PRINT_LEVEL = MadNLP.ERROR  # Options: ERROR, WARN, INFO, DEBUG
 const LINEAR_SOLVER = nothing  # Linear solver (nothing = default, or e.g., LapackCPUSolver)
@@ -141,6 +141,12 @@ println()
 
 # Set random seed
 Random.seed!(RANDOM_SEED)
+
+# Set Python random seeds if using JAX backend
+if BACKEND == "jax"
+    pyimport("numpy").random.seed(RANDOM_SEED)
+    pyimport("random").seed(RANDOM_SEED)
+end
 
 # =============================================================================
 # Load Model and Extract Configuration
@@ -433,6 +439,11 @@ start_time = time()
 result = solve_nlp(nlp_model; solver_options...)
 solve_time = time() - start_time
 
+# Extract timing statistics
+timing_stats = result[:timing_stats]
+total_eval_time = timing_stats.total_eval_time
+madnlp_internal_time = solve_time - total_eval_time
+
 println()
 println("="^80)
 println("[Optimization Complete]")
@@ -441,6 +452,8 @@ println("  Status: $(result[:status])")
 println("  Final objective: $(@sprintf("%.8e", result[:objective]))")
 println("  Iterations: $(result[:iter_count])")
 println("  Solve time: $(@sprintf("%.3f", solve_time)) seconds")
+println("  Eval time: $(@sprintf("%.3f", total_eval_time)) seconds ($(@sprintf("%.1f", 100*total_eval_time/solve_time))%)")
+println("  MadNLP internal time: $(@sprintf("%.3f", madnlp_internal_time)) seconds ($(@sprintf("%.1f", 100*madnlp_internal_time/solve_time))%)")
 println()
 
 # =============================================================================
@@ -540,6 +553,21 @@ if SAVE_RESULTS
     
     filepath = joinpath(OUTPUT_DIR, filename)
     
+    # Compute timing statistics
+    per_iter_times = timing_stats.per_iteration_times
+    avg_eval_time = length(per_iter_times) > 0 ? total_eval_time / length(per_iter_times) : 0.0
+    
+    # Prepare per-iteration timing data (group evaluations by approximate iteration)
+    # Note: MadNLP may call multiple evaluations per iteration
+    # We'll report individual evaluation times
+    per_iteration_data = [
+        Dict(
+            "call" => i,
+            "eval_time" => per_iter_times[i]
+        )
+        for i in 1:min(length(per_iter_times), 1000)  # Limit to first 1000 to avoid huge files
+    ]
+    
     # Prepare results dictionary
     results_dict = Dict(
         "timestamp" => string(Dates.now()),
@@ -575,6 +603,18 @@ if SAVE_RESULTS
             "solution_norm" => norm(x_sol),
             "solution_norm_inf" => maximum(abs.(x_sol)),
             "dist_to_target" => dist_to_target
+        ),
+        "timing" => Dict(
+            "total_solve_time" => solve_time,
+            "total_eval_time" => total_eval_time,
+            "total_madnlp_internal_time" => madnlp_internal_time,
+            "eval_count" => timing_stats.eval_count,
+            "per_iteration" => per_iteration_data,
+            "statistics" => Dict(
+                "avg_eval_time" => avg_eval_time,
+                "eval_time_percentage" => 100 * total_eval_time / solve_time,
+                "madnlp_internal_percentage" => 100 * madnlp_internal_time / solve_time
+            )
         ),
         "solution" => Dict(
             "x" => x_sol,
