@@ -22,6 +22,14 @@ using Printf
 using Dates
 using PythonCall
 
+# Conditionally load MadNLPGPU if needed (will be checked later based on DEVICE setting)
+const GPU_AVAILABLE = try
+    @eval using MadNLPGPU
+    true
+catch
+    false
+end
+
 println("="^80)
 println("MadNLP4NN - Configurable Neural Network Optimization")
 println("="^80)
@@ -44,7 +52,7 @@ const MODEL_PATH = "output/models/mnist/small_mlp/model_seed42.pt"
 # Backend Configuration
 # -----------------------------------------------------------------------------
 # Autodiff backend: "flux" (ForwardDiff) or "jax" (Python/JAX)
-const BACKEND = "jax"  # Options: "flux", "jax"
+const BACKEND = "flux"  # Options: "flux", "jax"
 
 # -----------------------------------------------------------------------------
 # Optimization Problem Configuration
@@ -54,7 +62,7 @@ const BACKEND = "jax"  # Options: "flux", "jax"
 const OBJECTIVE_TYPE = "target_distance"  # Options: "target_distance", "regularized", "custom"
 
 # Constraint type: "box", "spherical", "both", or "none"
-const CONSTRAINT_TYPE = "both"  # Options: "box", "spherical", "both", "none"
+const CONSTRAINT_TYPE = "box"  # Options: "box", "spherical", "both", "none"
 
 # -----------------------------------------------------------------------------
 # Target Output Configuration
@@ -97,18 +105,60 @@ const CUSTOM_NN_WEIGHT = 1.0  # Weight for neural network objective
 const CUSTOM_REG_WEIGHT = 0.01  # Weight for regularization term
 
 # -----------------------------------------------------------------------------
-# Solver Parameters
+# Solver Parameters - Performance Related
 # -----------------------------------------------------------------------------
 const MAX_ITER = 1000  # Maximum number of iterations
-const TOLERANCE = 1e-4  # Convergence tolerance
+const TOLERANCE = 1e-4  # Convergence tolerance (tol)
 const PRINT_LEVEL = MadNLP.ERROR  # Options: ERROR, WARN, INFO, DEBUG
-const LINEAR_SOLVER = nothing  # Linear solver (nothing = default, or e.g., LapackCPUSolver)
+
+# Device Configuration
+# Options: "cpu", "gpu", "auto"
+# Default: "cpu" (use CPU solvers)
+# Note: GPU requires MadNLPGPU package and CUDA-capable GPU
+const DEVICE = "cpu"
+
+# KKT System Configuration
+# Options: nothing (auto-select), MadNLP.SparseKKTSystem, MadNLP.SparseUnreducedKKTSystem,
+#          MadNLP.SparseCondensedKKTSystem, MadNLP.DenseKKTSystem, MadNLP.DenseCondensedKKTSystem
+# Default (nothing): Auto-selects based on problem structure (sparse or dense)
+const KKT_SYSTEM = nothing
+
+# Linear Solver Configuration
+# CPU Solvers:
+#   - nothing (default): UmfpackSolver for sparse, LapackCPUSolver for dense
+#   - MadNLP.UmfpackSolver: LU factorization with partial pivoting
+#   - MadNLP.LapackCPUSolver: Dense Bunch-Kaufman or Cholesky
+#   - MadNLP.Ma27Solver, Ma57Solver, Ma77Solver, Ma86Solver, Ma97Solver (requires MadNLPHSL)
+#   - MadNLP.MumpsSolver (requires MadNLPMumps)
+#   - MadNLP.PardisoSolver (requires MadNLPPardiso)
+#   - MadNLP.PardisoMKLSolver (requires Intel MKL)
+#
+# GPU Solvers (require MadNLPGPU and CUDA):
+#   - MadNLPGPU.LapackGPUSolver: Dense GPU solver (cuBLAS-based)
+#   - MadNLPGPU.CuCholeskySolver: Cholesky factorization on GPU (cuSOLVER)
+#   - MadNLPGPU.CUDSSSolver: NVIDIA cuDSS sparse direct solver
+#   - MadNLPGPU.RFSolver: GPU sparse solver
+#   - MadNLPGPU.GLUSolver: GPU LU solver
+#
+# Default (nothing): Auto-selects based on device and KKT system
+const LINEAR_SOLVER = nothing
+
+# Callback Type Configuration
+# Options: nothing (auto-select), MadNLP.SparseCallback, MadNLP.DenseCallback
+# Default (nothing): Auto-selects based on problem structure
+const CALLBACK = nothing
+
+# Computational Performance Settings
+const BLAS_NUM_THREADS = 1  # Number of CPU BLAS threads (1 = single-threaded, >1 for parallel BLAS)
+const DISABLE_GC = false  # Disable garbage collector during solve for better timing measurements
 
 # Additional MadNLP options (add more as needed)
 const EXTRA_SOLVER_OPTIONS = Dict{Symbol, Any}(
     # :mu_init => 1e-1,
-    # :kappa_d => 1e-5,
     # :acceptable_tol => 1e-3,
+    # Linear solver specific options (examples):
+    # :ma57_pivtol => 1e-8,
+    # :pardiso_matching_strategy => 1,
 )
 
 # -----------------------------------------------------------------------------
@@ -135,9 +185,36 @@ println("  Objective: $OBJECTIVE_TYPE")
 println("  Constraints: $CONSTRAINT_TYPE")
 println("  Target type: $TARGET_TYPE")
 println("  Initial point: $INIT_TYPE")
+println("\n[Solver Configuration]")
+println("  Device: $DEVICE")
 println("  Max iterations: $MAX_ITER")
 println("  Tolerance: $TOLERANCE")
+println("  KKT system: $(KKT_SYSTEM === nothing ? "auto" : KKT_SYSTEM)")
+println("  Linear solver: $(LINEAR_SOLVER === nothing ? "auto" : LINEAR_SOLVER)")
+println("  Callback: $(CALLBACK === nothing ? "auto" : CALLBACK)")
+println("  BLAS threads: $BLAS_NUM_THREADS")
+println("  Disable GC: $DISABLE_GC")
 println()
+
+# Validate GPU availability if GPU device is requested
+if DEVICE == "gpu"
+    if !GPU_AVAILABLE
+        error("""
+        GPU device requested but MadNLPGPU is not available.
+        
+        Please install MadNLPGPU:
+        1. Add the package: using Pkg; Pkg.add("MadNLPGPU")
+        2. Ensure you have CUDA installed and a CUDA-capable GPU
+        
+        Or set DEVICE = "cpu" to use CPU solvers.
+        """)
+    end
+    println("✓ GPU support detected (MadNLPGPU loaded)")
+    println()
+elseif DEVICE == "auto" && GPU_AVAILABLE
+    println("✓ GPU support available (will auto-select based on problem)")
+    println()
+end
 
 # Set random seed
 Random.seed!(RANDOM_SEED)
@@ -424,11 +501,22 @@ println()
 solver_options = Dict{Symbol, Any}(
     :max_iter => MAX_ITER,
     :tol => TOLERANCE,
-    :print_level => PRINT_LEVEL
+    :print_level => PRINT_LEVEL,
+    :blas_num_threads => BLAS_NUM_THREADS,
+    :disable_garbage_collector => DISABLE_GC
 )
+
+# Add optional performance-related parameters if specified
+if KKT_SYSTEM !== nothing
+    solver_options[:kkt_system] = KKT_SYSTEM
+end
 
 if LINEAR_SOLVER !== nothing
     solver_options[:linear_solver] = LINEAR_SOLVER
+end
+
+if CALLBACK !== nothing
+    solver_options[:callback] = CALLBACK
 end
 
 # Merge extra options
@@ -578,7 +666,14 @@ if SAVE_RESULTS
             "constraint_type" => CONSTRAINT_TYPE,
             "target_type" => TARGET_TYPE,
             "init_type" => INIT_TYPE,
-            "random_seed" => RANDOM_SEED
+            "random_seed" => RANDOM_SEED,
+            "device" => DEVICE,
+            "gpu_available" => GPU_AVAILABLE,
+            "kkt_system" => KKT_SYSTEM === nothing ? "auto" : string(KKT_SYSTEM),
+            "linear_solver" => LINEAR_SOLVER === nothing ? "auto" : string(LINEAR_SOLVER),
+            "callback" => CALLBACK === nothing ? "auto" : string(CALLBACK),
+            "blas_num_threads" => BLAS_NUM_THREADS,
+            "disable_gc" => DISABLE_GC
         ),
         "problem" => Dict(
             "input_dim" => input_dim,

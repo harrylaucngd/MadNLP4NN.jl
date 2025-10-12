@@ -185,6 +185,8 @@ function _create_python_nlp_model(
     constraint_func::Union{AbstractConstraintFunction, Nothing},
     x0::Vector{Float64}
 )
+    # Ensure Python path includes project python directory so local modules can be imported
+    setup_python_env()
     # Import Python JAX evaluator module
     jax_evaluator_module = pyimport("jax_nn_evaluator")
     
@@ -522,34 +524,119 @@ function NLPModels.hess_coord!(
             end
         else
             # Use ForwardDiff
-            # Compute Hessian of objective
-            obj_func = x_val -> begin
-                nn_output = nlp.neural_network(x_val)
-                evaluate(nlp.objective_func, x_val, nn_output)
-            end
-            hess_obj = ForwardDiff.hessian(obj_func, x)
+            n = nlp.meta.nvar
             
-            # Initialize Lagrangian Hessian
-            hess_lag = obj_weight .* hess_obj
-            
-            # Add constraint Hessians
-            if nlp.meta.ncon > 0 && any(y .!= 0)
-                for i in 1:nlp.meta.ncon
-                    if y[i] != 0
-                        # Compute Hessian of constraint i
-                        cons_i_func = x_val -> begin
-                            c_vals = evaluate(nlp.constraint_func, x_val)
-                            return c_vals[i]
-                        end
-                        hess_ci = ForwardDiff.hessian(cons_i_func, x)
-                        hess_lag .+= y[i] .* hess_ci
+            # Special handling for specific constraint types (optimization)
+            if nlp.constraint_func === nothing || nlp.meta.ncon == 0
+                # No constraints: only objective Hessian
+                obj_func = x_val -> begin
+                    nn_output = nlp.neural_network(x_val)
+                    evaluate(nlp.objective_func, x_val, nn_output)
+                end
+                hess_lag = obj_weight .* ForwardDiff.hessian(obj_func, x)
+                
+            elseif nlp.constraint_func isa BoxConstraints
+                # Box constraints: Hessian is zero (linear constraints)
+                # Only need objective Hessian
+                obj_func = x_val -> begin
+                    nn_output = nlp.neural_network(x_val)
+                    evaluate(nlp.objective_func, x_val, nn_output)
+                end
+                hess_lag = obj_weight .* ForwardDiff.hessian(obj_func, x)
+                
+            elseif nlp.constraint_func isa SphericalConstraint
+                # Spherical constraint: ∇²g(x) = 2I (constant Hessian)
+                obj_func = x_val -> begin
+                    nn_output = nlp.neural_network(x_val)
+                    evaluate(nlp.objective_func, x_val, nn_output)
+                end
+                hess_lag = obj_weight .* ForwardDiff.hessian(obj_func, x)
+                
+                # Add spherical constraint contribution: λ * 2I
+                if abs(y[1]) > 1e-12  # Only if multiplier is non-zero
+                    for i in 1:n
+                        hess_lag[i, i] += 2.0 * y[1]
                     end
                 end
+                
+            elseif nlp.constraint_func isa CompositeConstraint
+                # Composite constraint: check components
+                has_box = any(c -> c isa BoxConstraints, nlp.constraint_func.constraints)
+                has_sphere = any(c -> c isa SphericalConstraint, nlp.constraint_func.constraints)
+                has_other = any(c -> !(c isa BoxConstraints || c isa SphericalConstraint), 
+                               nlp.constraint_func.constraints)
+                
+                if !has_other && (has_box || has_sphere)
+                    # Only Box and/or Spherical: can use fast path
+                    obj_func = x_val -> begin
+                        nn_output = nlp.neural_network(x_val)
+                        evaluate(nlp.objective_func, x_val, nn_output)
+                    end
+                    hess_lag = obj_weight .* ForwardDiff.hessian(obj_func, x)
+                    
+                    # Add spherical constraint contribution if present
+                    if has_sphere
+                        # Find spherical constraint index
+                        sphere_idx = 0
+                        current_idx = 0
+                        for c in nlp.constraint_func.constraints
+                            n_cons = num_constraints(c)
+                            if c isa SphericalConstraint
+                                sphere_idx = current_idx + 1  # Spherical has 1 constraint
+                                break
+                            end
+                            current_idx += n_cons
+                        end
+                        
+                        # Add contribution: λ * 2I
+                        if sphere_idx > 0 && abs(y[sphere_idx]) > 1e-12
+                            for i in 1:n
+                                hess_lag[i, i] += 2.0 * y[sphere_idx]
+                            end
+                        end
+                    end
+                    # Box constraints contribute zero, so nothing to add
+                else
+                    # General case: compute Lagrangian Hessian directly (FIXED APPROACH)
+                    lagrangian_func = x_val -> begin
+                        # Objective term
+                        nn_output = nlp.neural_network(x_val)
+                        L = obj_weight * evaluate(nlp.objective_func, x_val, nn_output)
+                        
+                        # Constraint term: λᵀ·g(x)
+                        if nlp.meta.ncon > 0
+                            c_vals = evaluate(nlp.constraint_func, x_val)
+                            L += dot(y, c_vals)
+                        end
+                        
+                        return L
+                    end
+                    
+                    hess_lag = ForwardDiff.hessian(lagrangian_func, x)
+                end
+                
+            else
+                # General constraint type: compute Lagrangian Hessian directly (FIXED APPROACH)
+                # This is the corrected implementation that computes the Hessian in one pass
+                lagrangian_func = x_val -> begin
+                    # Objective term
+                    nn_output = nlp.neural_network(x_val)
+                    L = obj_weight * evaluate(nlp.objective_func, x_val, nn_output)
+                    
+                    # Constraint term: λᵀ·g(x)
+                    if nlp.meta.ncon > 0
+                        c_vals = evaluate(nlp.constraint_func, x_val)
+                        L += dot(y, c_vals)
+                    end
+                    
+                    return L
+                end
+                
+                hess_lag = ForwardDiff.hessian(lagrangian_func, x)
             end
             
             # Extract lower triangle
             idx = 1
-            n = nlp.meta.nvar
             for j in 1:n
                 for i in j:n
                     vals[idx] = hess_lag[i, j]

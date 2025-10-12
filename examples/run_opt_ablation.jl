@@ -8,8 +8,8 @@ This script runs optimization experiments across all models in a given dataset d
 testing each model with multiple initial points and target classes.
 
 Usage:
-    julia run_opt_ablation.jl --backend flux --dataset mnist
-    julia run_opt_ablation.jl --backend jax --dataset cifar
+    julia examples/run_opt_ablation.jl --backend flux --dataset mnist
+    julia examples/run_opt_ablation.jl --backend jax --dataset cifar
 
 Arguments:
     --backend: Backend to use ("flux" or "jax")
@@ -28,6 +28,14 @@ using ArgParse
 using FileIO
 using Images
 
+# Conditionally load MadNLPGPU if available
+const GPU_AVAILABLE = try
+    @eval using MadNLPGPU
+    true
+catch
+    false
+end
+
 println("="^80)
 println("MadNLP4NN - Ablation Study for Neural Network Optimization")
 println("="^80)
@@ -38,7 +46,7 @@ println()
 # Argument Parsing
 # =============================================================================
 
-function parse_commandline()
+function parse_commandline(args)
     s = ArgParseSettings(
         description = "Run ablation study for MadNLP4NN optimization",
         epilog = "Example: julia run_opt_ablation.jl --backend flux --dataset mnist"
@@ -65,12 +73,35 @@ function parse_commandline()
             help = "Print level: 'ERROR', 'WARN', 'INFO', 'DEBUG'"
             arg_type = String
             default = "ERROR"
+        "--device"
+            help = "Device: 'cpu', 'gpu', 'auto'"
+            arg_type = String
+            default = "cpu"
+        "--kkt-system"
+            help = "KKT system type: 'auto', 'sparse', 'sparse_unreduced', 'sparse_condensed', 'dense', 'dense_condensed'"
+            arg_type = String
+            default = "auto"
+        "--linear-solver"
+            help = "Linear solver (CPU): 'auto', 'umfpack', 'lapack_cpu', 'ma27', 'ma57', 'ma77', 'ma86', 'ma97', 'mumps', 'pardiso', 'pardiso_mkl'; (GPU): 'lapack_gpu', 'cudss', 'cucholesky', 'rf', 'glu'"
+            arg_type = String
+            default = "auto"
+        "--callback"
+            help = "Callback type: 'auto', 'sparse', 'dense'"
+            arg_type = String
+            default = "auto"
+        "--blas-threads"
+            help = "Number of BLAS threads"
+            arg_type = Int
+            default = 1
+        "--disable-gc"
+            help = "Disable garbage collector during solve"
+            action = :store_true
     end
 
-    return parse_args(s)
+    return parse_args(args, s)
 end
 
-args = parse_commandline()
+args = parse_commandline(ARGS)
 
 # =============================================================================
 # Configuration
@@ -80,6 +111,9 @@ const BACKEND = args["backend"]
 const DATASET = args["dataset"]
 const MAX_ITER = args["max-iter"]
 const TOLERANCE = args["tolerance"]
+const DEVICE = args["device"]
+const BLAS_THREADS = args["blas-threads"]
+const DISABLE_GC = args["disable-gc"]
 
 # Validate arguments
 if !(BACKEND in ["flux", "jax"])
@@ -88,6 +122,23 @@ end
 
 if !(DATASET in ["mnist", "cifar"])
     error("Invalid dataset: $DATASET. Must be 'mnist' or 'cifar'")
+end
+
+if !(DEVICE in ["cpu", "gpu", "auto"])
+    error("Invalid device: $DEVICE. Must be 'cpu', 'gpu', or 'auto'")
+end
+
+# Validate GPU availability
+if DEVICE == "gpu" && !GPU_AVAILABLE
+    error("""
+    GPU device requested but MadNLPGPU is not available.
+    
+    Please install MadNLPGPU:
+    1. Add the package: using Pkg; Pkg.add("MadNLPGPU")
+    2. Ensure you have CUDA installed and a CUDA-capable GPU
+    
+    Or use --device cpu to use CPU solvers.
+    """)
 end
 
 # Print level mapping
@@ -99,9 +150,62 @@ const PRINT_LEVEL_MAP = Dict(
 )
 const PRINT_LEVEL = PRINT_LEVEL_MAP[args["print-level"]]
 
+# KKT System mapping
+const KKT_SYSTEM_MAP = Dict(
+    "auto" => nothing,
+    "sparse" => MadNLP.SparseKKTSystem,
+    "sparse_unreduced" => MadNLP.SparseUnreducedKKTSystem,
+    "sparse_condensed" => MadNLP.SparseCondensedKKTSystem,
+    "dense" => MadNLP.DenseKKTSystem,
+    "dense_condensed" => MadNLP.DenseCondensedKKTSystem
+)
+const KKT_SYSTEM = KKT_SYSTEM_MAP[args["kkt-system"]]
+
+# Linear Solver mapping (CPU and GPU)
+const LINEAR_SOLVER_MAP = Dict(
+    # Auto-selection
+    "auto" => nothing,
+    # CPU solvers
+    "umfpack" => MadNLP.UmfpackSolver,
+    "lapack_cpu" => MadNLP.LapackCPUSolver,
+    "ma27" => MadNLP.Ma27Solver,
+    "ma57" => MadNLP.Ma57Solver,
+    "ma77" => MadNLP.Ma77Solver,
+    "ma86" => MadNLP.Ma86Solver,
+    "ma97" => MadNLP.Ma97Solver,
+    "mumps" => MadNLP.MumpsSolver,
+    "pardiso" => MadNLP.PardisoSolver,
+    "pardiso_mkl" => MadNLP.PardisoMKLSolver,
+    # GPU solvers (require MadNLPGPU)
+    "lapack_gpu" => GPU_AVAILABLE ? MadNLPGPU.LapackGPUSolver : nothing,
+    "cudss" => GPU_AVAILABLE ? MadNLPGPU.CUDSSSolver : nothing,
+    "cucholesky" => GPU_AVAILABLE ? MadNLPGPU.CuCholeskySolver : nothing,
+    "rf" => GPU_AVAILABLE ? MadNLPGPU.RFSolver : nothing,
+    "glu" => GPU_AVAILABLE ? MadNLPGPU.GLUSolver : nothing
+)
+
+# Validate GPU solver selection
+if args["linear-solver"] in ["lapack_gpu", "cudss", "cucholesky", "rf", "glu"] && !GPU_AVAILABLE
+    error("""
+    GPU linear solver '$(args["linear-solver"])' requested but MadNLPGPU is not available.
+    
+    Please install MadNLPGPU or use a CPU linear solver.
+    """)
+end
+
+const LINEAR_SOLVER = LINEAR_SOLVER_MAP[args["linear-solver"]]
+
+# Callback mapping
+const CALLBACK_MAP = Dict(
+    "auto" => nothing,
+    "sparse" => MadNLP.SparseCallback,
+    "dense" => MadNLP.DenseCallback
+)
+const CALLBACK = CALLBACK_MAP[args["callback"]]
+
 # Fixed optimization settings
 const RANDOM_SEED = 42
-const CONSTRAINT_TYPE = "both"
+const CONSTRAINT_TYPE = "box"  # Options: "box", "spherical", "both", "none"
 const BOX_LOWER = -100.0
 const BOX_UPPER = 100.0
 const SPHERE_RADIUS = 50.0
@@ -159,8 +263,21 @@ println("  Output directory: $OUTPUT_DIR")
 println("  Number of models: $(length(MODELS))")
 println("  Input dimension: $INPUT_DIM")
 println("  Output dimension: $OUTPUT_DIM")
+println("\n[Solver Configuration]")
+println("  Device: $DEVICE")
+if GPU_AVAILABLE
+    println("  GPU support: available (MadNLPGPU loaded)")
+else
+    println("  GPU support: not available")
+end
+println("  Constraint type: $CONSTRAINT_TYPE")
 println("  Max iterations: $MAX_ITER")
 println("  Tolerance: $TOLERANCE")
+println("  KKT system: $(args["kkt-system"])")
+println("  Linear solver: $(args["linear-solver"])")
+println("  Callback: $(args["callback"])")
+println("  BLAS threads: $BLAS_THREADS")
+println("  Disable GC: $DISABLE_GC")
 println("  Random seed: $RANDOM_SEED")
 println()
 
@@ -277,15 +394,25 @@ function run_single_optimization(
     # Create objective
     objective_func = NeuralNetworkObjective(target, weight=1.0)
     
-    # Create constraints (box + spherical)
+    # Create constraints based on CONSTRAINT_TYPE
     x_min = fill(BOX_LOWER, length(x0))
     x_max = fill(BOX_UPPER, length(x0))
     sphere_center = copy(x0)
     
-    constraint_func = CompositeConstraint(
-        BoxConstraints(x_min, x_max),
+    constraint_func = if CONSTRAINT_TYPE == "box"
+        BoxConstraints(x_min, x_max)
+    elseif CONSTRAINT_TYPE == "spherical"
         SphericalConstraint(sphere_center, SPHERE_RADIUS)
-    )
+    elseif CONSTRAINT_TYPE == "both"
+        CompositeConstraint(
+            BoxConstraints(x_min, x_max),
+            SphericalConstraint(sphere_center, SPHERE_RADIUS)
+        )
+    elseif CONSTRAINT_TYPE == "none"
+        nothing
+    else
+        error("Unknown CONSTRAINT_TYPE: $CONSTRAINT_TYPE. Must be 'box', 'spherical', 'both', or 'none'")
+    end
     
     # Create NLP model
     use_python = (backend == "jax")
@@ -303,8 +430,23 @@ function run_single_optimization(
         solver_options = Dict{Symbol, Any}(
             :max_iter => MAX_ITER,
             :tol => TOLERANCE,
-            :print_level => PRINT_LEVEL
+            :print_level => PRINT_LEVEL,
+            :blas_num_threads => BLAS_THREADS,
+            :disable_garbage_collector => DISABLE_GC
         )
+        
+        # Add optional performance-related parameters if specified
+        if KKT_SYSTEM !== nothing
+            solver_options[:kkt_system] = KKT_SYSTEM
+        end
+        
+        if LINEAR_SOLVER !== nothing
+            solver_options[:linear_solver] = LINEAR_SOLVER
+        end
+        
+        if CALLBACK !== nothing
+            solver_options[:callback] = CALLBACK
+        end
         
         start_time = time()
         result = solve_nlp(nlp_model; solver_options...)
@@ -341,7 +483,14 @@ function run_single_optimization(
                 "backend" => backend,
                 "dataset" => DATASET,
                 "target_class" => target_class,
-                "random_seed" => RANDOM_SEED
+                "random_seed" => RANDOM_SEED,
+                "device" => DEVICE,
+                "gpu_available" => GPU_AVAILABLE,
+                "kkt_system" => args["kkt-system"],
+                "linear_solver" => args["linear-solver"],
+                "callback" => args["callback"],
+                "blas_threads" => BLAS_THREADS,
+                "disable_gc" => DISABLE_GC
             ),
             "problem" => Dict(
                 "input_dim" => INPUT_DIM,
@@ -353,8 +502,8 @@ function run_single_optimization(
                 "max_iter" => MAX_ITER,
                 "tolerance" => TOLERANCE,
                 "constraint_type" => CONSTRAINT_TYPE,
-                "box_bounds" => [BOX_LOWER, BOX_UPPER],
-                "sphere_radius" => SPHERE_RADIUS
+                "box_bounds" => CONSTRAINT_TYPE in ["box", "both"] ? [BOX_LOWER, BOX_UPPER] : nothing,
+                "sphere_radius" => CONSTRAINT_TYPE in ["spherical", "both"] ? SPHERE_RADIUS : nothing
             ),
             "results" => Dict(
                 "status" => string(result[:status]),
@@ -444,7 +593,7 @@ for (model_idx, model_file) in enumerate(MODELS)
     # Check if model exists
     if !isfile(model_path)
         @warn "Model file not found: $model_path. Skipping..."
-        failed_experiments += OUTPUT_DIM
+        global failed_experiments += OUTPUT_DIM
         continue
     end
     
@@ -467,9 +616,9 @@ for (model_idx, model_file) in enumerate(MODELS)
         )
         
         if success
-            completed_experiments += 1
+            global completed_experiments += 1
         else
-            failed_experiments += 1
+            global failed_experiments += 1
         end
         
         println()
