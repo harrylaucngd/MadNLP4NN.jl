@@ -56,9 +56,123 @@ def smooth_relu(x: jnp.ndarray, alpha: float = 1e-3) -> jnp.ndarray:
     return alpha * jax.nn.softplus(x / alpha)
 
 
+def _infer_config_from_state_dict(state_dict: Dict) -> Dict:
+    """
+    Infer model configuration from state_dict structure.
+    
+    This function attempts to determine the model architecture and dimensions
+    by analyzing the keys and shapes in the state_dict.
+    
+    Args:
+        state_dict: PyTorch state dictionary (OrderedDict)
+    
+    Returns:
+        config: Model configuration dict with keys:
+            - model_type: 'mlp', 'resmlp', etc.
+            - input_dim: input dimension
+            - output_dim: output dimension (number of classes)
+            - hidden_dims: list of hidden layer dimensions
+            - activation: activation function name
+    """
+    keys = list(state_dict.keys())
+    
+    # Analyze the structure to determine model type
+    # Check for CNN architectures
+    has_conv = any('conv' in key.lower() and len(state_dict[key].shape) == 4 for key in keys if 'weight' in key)
+    
+    # Detect ResNet
+    is_resnet = has_conv and any(key.startswith('layer1.') or key.startswith('layer2.') or key.startswith('layer3.') for key in keys)
+    
+    # Detect simple feedforward network (MLP/ResMLP)
+    is_sequential_mlp = any(key.startswith('network.') or (key.startswith('layers.') and 'layer1' not in key) for key in keys)
+    
+    if is_resnet:
+        # ResNet configuration
+        # Find input channels from first conv
+        input_channels = state_dict['conv1.weight'].shape[1] if 'conv1.weight' in state_dict else 3
+        # Find output dim from fc layer
+        output_dim = state_dict['fc.weight'].shape[0] if 'fc.weight' in state_dict else 10
+        
+        # Assume CIFAR format: 3x32x32 = 3072
+        config = {
+            'model_type': 'resnet',
+            'input_dim': input_channels * 32 * 32,  # CIFAR default
+            'output_dim': int(output_dim),
+            'input_channels': int(input_channels),
+            'num_classes': int(output_dim)
+        }
+        
+        return config
+    
+    elif not is_sequential_mlp:
+        raise ValueError(
+            f"Cannot infer config from state_dict. "
+            f"State dict keys suggest an unknown architecture. "
+            f"First few keys: {keys[:5]}. "
+            f"Please save models with full checkpoint format including 'model_config'."
+        )
+    
+    # Extract layer dimensions from weight shapes
+    # Assume format: network.X.weight or layers.X.weight for linear layers
+    layer_shapes = []
+    for key in sorted(keys):
+        if 'weight' in key and ('network.' in key or 'layers.' in key):
+            # Extract layer index
+            parts = key.split('.')
+            try:
+                layer_idx = int(parts[1])
+                shape = state_dict[key].shape
+                if len(shape) == 2:  # Linear layer: (out_features, in_features)
+                    layer_shapes.append((layer_idx, shape))
+            except (ValueError, IndexError):
+                continue
+    
+    if len(layer_shapes) < 2:
+        raise ValueError(
+            f"Cannot infer layer structure from state_dict. "
+            f"Found {len(layer_shapes)} linear layers, need at least 2."
+        )
+    
+    # Sort by layer index and extract dimensions
+    layer_shapes.sort(key=lambda x: x[0])
+    
+    # First layer: (out_dim, input_dim)
+    input_dim = layer_shapes[0][1][1]
+    
+    # Hidden dimensions: output of each hidden layer
+    hidden_dims = [shape[1][0] for shape in layer_shapes[:-1]]
+    
+    # Last layer: output dimension
+    output_dim = layer_shapes[-1][1][0]
+    
+    # Determine model type (for MLP/ResMLP)
+    # Check for residual connections
+    has_residual = any('residual' in key or 'shortcut' in key or 'blocks.' in key for key in keys)
+    
+    if has_residual:
+        model_type = 'resmlp'
+    else:
+        model_type = 'mlp'
+    
+    config = {
+        'model_type': model_type,
+        'input_dim': int(input_dim),
+        'output_dim': int(output_dim),
+        'hidden_dims': [int(d) for d in hidden_dims],
+        'activation': 'relu',  # Assume ReLU as default
+        'dropout_rate': 0.0,  # Assume no dropout for inference
+    }
+    
+    return config
+
+
 def load_pytorch_model_to_jax(model_path: str) -> Tuple[Callable, Dict, Dict]:
     """
     Load PyTorch model and convert to JAX format.
+    
+    Supports two formats:
+    1. Full checkpoint dict with 'model_state_dict' and 'model_config' keys
+    2. Pure state_dict (OrderedDict) - will infer config from state_dict
     
     Args:
         model_path: Path to saved PyTorch model (.pt file)
@@ -74,8 +188,18 @@ def load_pytorch_model_to_jax(model_path: str) -> Tuple[Callable, Dict, Dict]:
     """
     # Load checkpoint
     checkpoint = torch.load(model_path, map_location='cpu')
-    state_dict = checkpoint['model_state_dict']
-    config = checkpoint['model_config']
+    
+    # Detect format: full checkpoint dict or pure state_dict
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        # Format 1: Full checkpoint with config
+        state_dict = checkpoint['model_state_dict']
+        config = checkpoint['model_config']
+        print(f"  Loaded full checkpoint with config")
+    else:
+        # Format 2: Pure state_dict - need to infer config
+        state_dict = checkpoint
+        config = _infer_config_from_state_dict(state_dict)
+        print(f"  Loaded pure state_dict, inferred config: {config['model_type']}")
     
     # Convert based on model type
     model_type = config['model_type']
@@ -83,6 +207,8 @@ def load_pytorch_model_to_jax(model_path: str) -> Tuple[Callable, Dict, Dict]:
         jax_forward, params = _build_mlp_jax(state_dict, config)
     elif model_type in ['resmlp', 'ResMLPClassifier']:
         jax_forward, params = _build_resmlp_jax(state_dict, config)
+    elif model_type in ['resnet', 'ResNet']:
+        jax_forward, params = _build_resnet_jax(state_dict, config)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     
@@ -214,6 +340,340 @@ def _build_resmlp_jax(state_dict: Dict, config: Dict) -> Tuple[Callable, Dict]:
         
         # Output layer
         out = jnp.dot(params_dict['output']['W'], out) + params_dict['output']['b']
+        return out
+    
+    return forward, params
+
+
+# =============================================================================
+# CNN Helper Functions
+# =============================================================================
+
+def _conv2d_jax(x, weight, bias, stride=1, padding=0):
+    """
+    JAX implementation of 2D convolution.
+    
+    Args:
+        x: Input tensor of shape (C_in, H, W) or (H, W, C_in)
+        weight: Convolution kernel of shape (C_out, C_in, K_H, K_W)
+        bias: Bias of shape (C_out,)
+        stride: Stride value
+        padding: Padding value
+    
+    Returns:
+        Output tensor after convolution
+    """
+    # PyTorch uses NCHW format, but we're processing single samples
+    # x is (C, H, W), weight is (C_out, C_in, K_H, K_W)
+    
+    # JAX lax.conv expects: (N, H, W, C_in) and (H, W, C_in, C_out)
+    # Convert from (C, H, W) to (1, H, W, C)
+    if x.ndim == 3:
+        x_formatted = jnp.expand_dims(jnp.transpose(x, (1, 2, 0)), axis=0)  # (1, H, W, C)
+    else:
+        x_formatted = x
+    
+    # Convert weight from (C_out, C_in, K_H, K_W) to (K_H, K_W, C_in, C_out)
+    weight_formatted = jnp.transpose(weight, (2, 3, 1, 0))
+    
+    # Perform convolution
+    dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
+    out = jax.lax.conv_general_dilated(
+        x_formatted,
+        weight_formatted,
+        window_strides=(stride, stride),
+        padding=((padding, padding), (padding, padding)),
+        dimension_numbers=dimension_numbers
+    )
+    
+    # Add bias: (1, H, W, C_out) + (C_out,)
+    out = out + bias.reshape(1, 1, 1, -1)
+    
+    # Convert back to (C_out, H, W)
+    out = jnp.transpose(out[0], (2, 0, 1))
+    
+    return out
+
+
+def _batchnorm_jax(x, weight, bias, running_mean, running_var, eps=1e-5):
+    """
+    JAX implementation of Batch Normalization (inference mode).
+    
+    Args:
+        x: Input tensor of shape (C, H, W)
+        weight: Scale parameter (gamma) of shape (C,)
+        bias: Shift parameter (beta) of shape (C,)
+        running_mean: Running mean of shape (C,)
+        running_var: Running variance of shape (C,)
+        eps: Small constant for numerical stability
+    
+    Returns:
+        Normalized tensor
+    """
+    # Normalize: (x - mean) / sqrt(var + eps)
+    # x is (C, H, W), we normalize per channel
+    
+    # Reshape stats to (C, 1, 1) for broadcasting
+    mean = running_mean.reshape(-1, 1, 1)
+    var = running_var.reshape(-1, 1, 1)
+    gamma = weight.reshape(-1, 1, 1)
+    beta = bias.reshape(-1, 1, 1)
+    
+    # Normalize and scale
+    x_norm = (x - mean) / jnp.sqrt(var + eps)
+    out = gamma * x_norm + beta
+    
+    return out
+
+
+def _avg_pool2d_jax(x, kernel_size, stride=None):
+    """
+    JAX implementation of 2D average pooling.
+    
+    Args:
+        x: Input tensor of shape (C, H, W)
+        kernel_size: Size of pooling window
+        stride: Stride (defaults to kernel_size)
+    
+    Returns:
+        Pooled tensor
+    """
+    if stride is None:
+        stride = kernel_size
+    
+    # Convert to NHWC format for lax operations
+    x_formatted = jnp.expand_dims(jnp.transpose(x, (1, 2, 0)), axis=0)  # (1, H, W, C)
+    
+    # Use reduce_window for average pooling with jax.lax.add (supports autodiff)
+    out = jax.lax.reduce_window(
+        x_formatted,
+        0.0,
+        jax.lax.add,  # Use jax.lax.add instead of lambda
+        window_dimensions=(1, kernel_size, kernel_size, 1),
+        window_strides=(1, stride, stride, 1),
+        padding='VALID'
+    )
+    
+    # Divide by kernel size squared to get average
+    out = out / (kernel_size * kernel_size)
+    
+    # Convert back to CHW format
+    out = jnp.transpose(out[0], (2, 0, 1))
+    
+    return out
+
+
+def _adaptive_avg_pool2d_jax(x, output_size):
+    """
+    JAX implementation of adaptive average pooling.
+    
+    Args:
+        x: Input tensor of shape (C, H, W)
+        output_size: Target output size (H_out, W_out) or single int
+    
+    Returns:
+        Pooled tensor of shape (C, output_size, output_size) or (C, H_out, W_out)
+    """
+    if isinstance(output_size, int):
+        output_size = (output_size, output_size)
+    
+    C, H, W = x.shape
+    H_out, W_out = output_size
+    
+    # For simple case of output_size=1, just use mean
+    if H_out == 1 and W_out == 1:
+        return jnp.mean(x, axis=(1, 2), keepdims=True)
+    
+    # Calculate stride and kernel size for each dimension
+    stride_h = H // H_out
+    stride_w = W // W_out
+    kernel_h = H - (H_out - 1) * stride_h
+    kernel_w = W - (W_out - 1) * stride_w
+    
+    # Convert to NHWC format
+    x_formatted = jnp.expand_dims(jnp.transpose(x, (1, 2, 0)), axis=0)  # (1, H, W, C)
+    
+    # Use reduce_window for adaptive pooling with jax.lax.add (supports autodiff)
+    out = jax.lax.reduce_window(
+        x_formatted,
+        0.0,
+        jax.lax.add,  # Use jax.lax.add instead of lambda
+        window_dimensions=(1, kernel_h, kernel_w, 1),
+        window_strides=(1, stride_h, stride_w, 1),
+        padding='VALID'
+    )
+    
+    # Divide by window size
+    out = out / (kernel_h * kernel_w)
+    
+    # Convert back to CHW format
+    out = jnp.transpose(out[0], (2, 0, 1))
+    
+    return out
+
+
+# =============================================================================
+# CNN Architecture Builders
+# =============================================================================
+
+def _build_resnet_jax(state_dict: Dict, config: Dict) -> Tuple[Callable, Dict]:
+    """
+    Build JAX ResNet from PyTorch state dict.
+    
+    Supports CIFAR-style ResNets (ResNet20, ResNet32, ResNet44, ResNet56).
+    
+    Args:
+        state_dict: PyTorch state dictionary
+        config: Model configuration
+    
+    Returns:
+        forward: JAX forward function
+        params: Parameter dictionary
+    """
+    # Extract parameters
+    params = {
+        'conv1': {
+            'weight': jnp.array(state_dict['conv1.weight'].detach().cpu().numpy(), dtype=jnp.float64)
+        },
+        'bn1': {
+            'weight': jnp.array(state_dict['bn1.weight'].detach().cpu().numpy(), dtype=jnp.float64),
+            'bias': jnp.array(state_dict['bn1.bias'].detach().cpu().numpy(), dtype=jnp.float64),
+            'running_mean': jnp.array(state_dict['bn1.running_mean'].detach().cpu().numpy(), dtype=jnp.float64),
+            'running_var': jnp.array(state_dict['bn1.running_var'].detach().cpu().numpy(), dtype=jnp.float64)
+        },
+        'layers': {},
+        'fc': {
+            'weight': jnp.array(state_dict['fc.weight'].detach().cpu().numpy(), dtype=jnp.float64),
+            'bias': jnp.array(state_dict['fc.bias'].detach().cpu().numpy(), dtype=jnp.float64)
+        }
+    }
+    
+    # Extract layer structure (layer1, layer2, layer3)
+    for layer_name in ['layer1', 'layer2', 'layer3']:
+        layer_params = []
+        block_idx = 0
+        
+        while f'{layer_name}.{block_idx}.conv1.weight' in state_dict:
+            block_params = {
+                'conv1': {
+                    'weight': jnp.array(state_dict[f'{layer_name}.{block_idx}.conv1.weight'].detach().cpu().numpy(), dtype=jnp.float64)
+                },
+                'bn1': {
+                    'weight': jnp.array(state_dict[f'{layer_name}.{block_idx}.bn1.weight'].detach().cpu().numpy(), dtype=jnp.float64),
+                    'bias': jnp.array(state_dict[f'{layer_name}.{block_idx}.bn1.bias'].detach().cpu().numpy(), dtype=jnp.float64),
+                    'running_mean': jnp.array(state_dict[f'{layer_name}.{block_idx}.bn1.running_mean'].detach().cpu().numpy(), dtype=jnp.float64),
+                    'running_var': jnp.array(state_dict[f'{layer_name}.{block_idx}.bn1.running_var'].detach().cpu().numpy(), dtype=jnp.float64)
+                },
+                'conv2': {
+                    'weight': jnp.array(state_dict[f'{layer_name}.{block_idx}.conv2.weight'].detach().cpu().numpy(), dtype=jnp.float64)
+                },
+                'bn2': {
+                    'weight': jnp.array(state_dict[f'{layer_name}.{block_idx}.bn2.weight'].detach().cpu().numpy(), dtype=jnp.float64),
+                    'bias': jnp.array(state_dict[f'{layer_name}.{block_idx}.bn2.bias'].detach().cpu().numpy(), dtype=jnp.float64),
+                    'running_mean': jnp.array(state_dict[f'{layer_name}.{block_idx}.bn2.running_mean'].detach().cpu().numpy(), dtype=jnp.float64),
+                    'running_var': jnp.array(state_dict[f'{layer_name}.{block_idx}.bn2.running_var'].detach().cpu().numpy(), dtype=jnp.float64)
+                }
+            }
+            
+            # Check for shortcut (used when dimensions change)
+            if f'{layer_name}.{block_idx}.shortcut.0.weight' in state_dict:
+                block_params['shortcut'] = {
+                    'conv': {
+                        'weight': jnp.array(state_dict[f'{layer_name}.{block_idx}.shortcut.0.weight'].detach().cpu().numpy(), dtype=jnp.float64)
+                    },
+                    'bn': {
+                        'weight': jnp.array(state_dict[f'{layer_name}.{block_idx}.shortcut.1.weight'].detach().cpu().numpy(), dtype=jnp.float64),
+                        'bias': jnp.array(state_dict[f'{layer_name}.{block_idx}.shortcut.1.bias'].detach().cpu().numpy(), dtype=jnp.float64),
+                        'running_mean': jnp.array(state_dict[f'{layer_name}.{block_idx}.shortcut.1.running_mean'].detach().cpu().numpy(), dtype=jnp.float64),
+                        'running_var': jnp.array(state_dict[f'{layer_name}.{block_idx}.shortcut.1.running_var'].detach().cpu().numpy(), dtype=jnp.float64)
+                    }
+                }
+            
+            layer_params.append(block_params)
+            block_idx += 1
+        
+        params['layers'][layer_name] = layer_params
+    
+    # Determine stride for each layer (first block of layer2 and layer3 use stride=2)
+    layer_strides = {
+        'layer1': (1, 1),  # (first_block_stride, other_blocks_stride)
+        'layer2': (2, 1),
+        'layer3': (2, 1)
+    }
+    
+    # Precompute image dimensions (must be done outside JIT-compiled function)
+    input_dim = config.get('input_dim', 3072)
+    input_channels = config.get('input_channels', 3)
+    # Calculate image size: for CIFAR 3072 / 3 = 1024, sqrt(1024) = 32
+    img_h = img_w = int((input_dim // input_channels) ** 0.5)
+    
+    # Build forward function
+    def forward(params_dict, x):
+        """ResNet forward pass for CIFAR."""
+        # Reshape flat input to image: x is (3072,) -> (3, 32, 32)
+        if x.ndim == 1:
+            x = x.reshape(input_channels, img_h, img_w)
+        
+        # Initial convolution
+        out = _conv2d_jax(x, params_dict['conv1']['weight'], 
+                         jnp.zeros(params_dict['conv1']['weight'].shape[0]), 
+                         stride=1, padding=1)
+        out = _batchnorm_jax(out, params_dict['bn1']['weight'], params_dict['bn1']['bias'],
+                            params_dict['bn1']['running_mean'], params_dict['bn1']['running_var'])
+        out = smooth_relu(out)
+        
+        # Process each layer
+        for layer_name in ['layer1', 'layer2', 'layer3']:
+            first_stride, other_stride = layer_strides[layer_name]
+            blocks = params_dict['layers'][layer_name]
+            
+            for block_idx, block in enumerate(blocks):
+                identity = out
+                stride = first_stride if block_idx == 0 else other_stride
+                
+                # First conv + bn + relu
+                res = _conv2d_jax(out, block['conv1']['weight'],
+                                jnp.zeros(block['conv1']['weight'].shape[0]),
+                                stride=stride, padding=1)
+                res = _batchnorm_jax(res, block['bn1']['weight'], block['bn1']['bias'],
+                                    block['bn1']['running_mean'], block['bn1']['running_var'])
+                res = smooth_relu(res)
+                
+                # Second conv + bn
+                res = _conv2d_jax(res, block['conv2']['weight'],
+                                jnp.zeros(block['conv2']['weight'].shape[0]),
+                                stride=1, padding=1)
+                res = _batchnorm_jax(res, block['bn2']['weight'], block['bn2']['bias'],
+                                    block['bn2']['running_mean'], block['bn2']['running_var'])
+                
+                # Shortcut connection
+                if 'shortcut' in block:
+                    identity = _conv2d_jax(identity, block['shortcut']['conv']['weight'],
+                                         jnp.zeros(block['shortcut']['conv']['weight'].shape[0]),
+                                         stride=stride, padding=0)
+                    identity = _batchnorm_jax(identity, block['shortcut']['bn']['weight'],
+                                            block['shortcut']['bn']['bias'],
+                                            block['shortcut']['bn']['running_mean'],
+                                            block['shortcut']['bn']['running_var'])
+                elif stride > 1:
+                    # Downsample identity with average pooling if stride > 1 and no explicit shortcut
+                    identity = _avg_pool2d_jax(identity, kernel_size=stride, stride=stride)
+                    # Pad channels if needed
+                    if res.shape[0] > identity.shape[0]:
+                        pad_channels = res.shape[0] - identity.shape[0]
+                        padding = jnp.zeros((pad_channels, identity.shape[1], identity.shape[2]))
+                        identity = jnp.concatenate([identity, padding], axis=0)
+                
+                # Add residual
+                out = res + identity
+                out = smooth_relu(out)
+        
+        # Global average pooling
+        out = jnp.mean(out, axis=(1, 2))  # (C,)
+        
+        # Fully connected layer
+        out = jnp.dot(params_dict['fc']['weight'], out) + params_dict['fc']['bias']
+        
         return out
     
     return forward, params

@@ -17,31 +17,92 @@ using Zygote
 """
     TimingStats
 
-Mutable struct to track timing statistics during optimization.
+Mutable struct to track timing statistics during optimization with detailed breakdown by operation type.
 
 # Fields
-- `total_eval_time`: Total time spent in evaluation callbacks (objective, gradient, constraints, Jacobian, Hessian)
+## Categorized timing
+- `obj_time`: Time spent evaluating objective function
+- `grad_time`: Time spent evaluating gradients
+- `cons_time`: Time spent evaluating constraints
+- `jac_time`: Time spent evaluating Jacobian matrices
+- `hess_time`: Time spent evaluating Hessian matrices
+
+## Categorized counts
+- `obj_count`: Number of objective evaluations
+- `grad_count`: Number of gradient evaluations
+- `cons_count`: Number of constraint evaluations
+- `jac_count`: Number of Jacobian evaluations
+- `hess_count`: Number of Hessian evaluations
+
+## Total statistics (for backward compatibility)
+- `total_eval_time`: Total time spent in all evaluation callbacks
 - `eval_count`: Total number of evaluation calls
 - `per_iteration_times`: Vector of eval times per iteration (approximated by tracking evaluation calls)
 - `iteration_start_time`: Time when current iteration started
 """
 mutable struct TimingStats
+    # Categorized timing
+    obj_time::Float64
+    grad_time::Float64
+    cons_time::Float64
+    jac_time::Float64
+    hess_time::Float64
+    
+    # Categorized counts
+    obj_count::Int
+    grad_count::Int
+    cons_count::Int
+    jac_count::Int
+    hess_count::Int
+    
+    # Total statistics (backward compatibility)
     total_eval_time::Float64
     eval_count::Int
     per_iteration_times::Vector{Float64}
     iteration_start_time::Float64
     
-    TimingStats() = new(0.0, 0, Float64[], time())
+    TimingStats() = new(
+        0.0, 0.0, 0.0, 0.0, 0.0,  # times
+        0, 0, 0, 0, 0,              # counts
+        0.0, 0, Float64[], time()   # totals
+    )
 end
 
 """
-Record evaluation time in timing stats.
+    record_eval_time!(stats::TimingStats, elapsed::Float64, eval_type::Symbol)
+
+Record evaluation time in timing stats with categorization by operation type.
+
+# Arguments
+- `stats`: TimingStats object to update
+- `elapsed`: Time elapsed for this evaluation
+- `eval_type`: Type of evaluation - one of :obj, :grad, :cons, :jac, :hess
 """
-function record_eval_time!(stats::TimingStats, elapsed::Float64)
+function record_eval_time!(stats::TimingStats, elapsed::Float64, eval_type::Symbol)
+    # Update total statistics
     stats.total_eval_time += elapsed
     stats.eval_count += 1
-    # Store per-iteration time (each call is approximately one iteration's evaluation)
     push!(stats.per_iteration_times, elapsed)
+    
+    # Update categorized statistics
+    if eval_type == :obj
+        stats.obj_time += elapsed
+        stats.obj_count += 1
+    elseif eval_type == :grad
+        stats.grad_time += elapsed
+        stats.grad_count += 1
+    elseif eval_type == :cons
+        stats.cons_time += elapsed
+        stats.cons_count += 1
+    elseif eval_type == :jac
+        stats.jac_time += elapsed
+        stats.jac_count += 1
+    elseif eval_type == :hess
+        stats.hess_time += elapsed
+        stats.hess_count += 1
+    else
+        @warn "Unknown eval_type: $eval_type, not categorized"
+    end
 end
 
 # ============================================================================
@@ -240,23 +301,30 @@ function _create_python_nlp_model(
     end
     
     # Extract bounds and radius from constraints
-    bounds = nothing
+    # Treat BoxConstraints as variable bounds (lvar/uvar) instead of general constraints
+    x_min = nothing
+    x_max = nothing
     radius = nothing
     
     if constraint_func isa BoxConstraints
-        bounds = (constraint_func.x_min, constraint_func.x_max)
+        x_min = constraint_func.x_min
+        x_max = constraint_func.x_max
     elseif constraint_func isa SphericalConstraint
         radius = constraint_func.radius
     elseif constraint_func isa CompositeConstraint
         # Extract from composite constraint
         for c in constraint_func.constraints
             if c isa BoxConstraints
-                bounds = (c.x_min, c.x_max)
+                x_min = c.x_min
+                x_max = c.x_max
             elseif c isa SphericalConstraint
                 radius = c.radius
             end
         end
     end
+    
+    # Do NOT pass box bounds as inequality constraints to Python evaluator
+    bounds_for_evaluator = nothing
     
     # Create Python evaluator
     py_eval = jax_evaluator_module.create_evaluator(
@@ -265,7 +333,7 @@ function _create_python_nlp_model(
         x0;
         objective_weight=1.0,
         regularization_weight=regularization_weight,
-        bounds=bounds,
+        bounds=bounds_for_evaluator,
         radius=radius
     )
     
@@ -273,9 +341,9 @@ function _create_python_nlp_model(
     n = pyconvert(Int, py_eval.n)
     m = pyconvert(Int, py_eval.m)
     
-    # Set up bounds
-    lvar = fill(-Inf, n)
-    uvar = fill(Inf, n)
+    # Set up variable bounds (use box as variable bounds if provided)
+    lvar = x_min === nothing ? fill(-Inf, n) : copy(x_min)
+    uvar = x_max === nothing ? fill(Inf, n)  : copy(x_max)
     lcon = fill(-Inf, m)
     ucon = fill(0.0, m)
     
@@ -385,7 +453,7 @@ function NLPModels.obj(nlp::NeuralNetworkNLPModel, x::AbstractVector)
         end
     end
     
-    record_eval_time!(nlp.timing_stats, eval_time)
+    record_eval_time!(nlp.timing_stats, eval_time, :obj)
     return f
 end
 
@@ -427,7 +495,7 @@ function NLPModels.grad!(nlp::NeuralNetworkNLPModel, x::AbstractVector, g::Abstr
         end
     end
     
-    record_eval_time!(nlp.timing_stats, eval_time)
+    record_eval_time!(nlp.timing_stats, eval_time, :grad)
     return g
 end
 
@@ -456,7 +524,7 @@ function NLPModels.cons!(nlp::NeuralNetworkNLPModel, x::AbstractVector, c::Abstr
         end
     end
     
-    record_eval_time!(nlp.timing_stats, eval_time)
+    record_eval_time!(nlp.timing_stats, eval_time, :cons)
     return c
 end
 
@@ -547,7 +615,7 @@ function NLPModels.jac_coord!(
         end
     end
     
-    record_eval_time!(nlp.timing_stats, eval_time)
+    record_eval_time!(nlp.timing_stats, eval_time, :jac)
     return vals
 end
 
@@ -734,7 +802,7 @@ function NLPModels.hess_coord!(
         end
     end
     
-    record_eval_time!(nlp.timing_stats, eval_time)
+    record_eval_time!(nlp.timing_stats, eval_time, :hess)
     return vals
 end
 

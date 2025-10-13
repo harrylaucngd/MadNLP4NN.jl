@@ -28,6 +28,14 @@ using ArgParse
 using FileIO
 using Images
 
+# Conditionally load MadNLPMumps (parallel sparse solver) if available
+const MUMPS_AVAILABLE = try
+    @eval using MadNLPMumps
+    true
+catch
+    false
+end
+
 # Conditionally load MadNLPGPU if available
 const GPU_AVAILABLE = try
     @eval using MadNLPGPU
@@ -49,18 +57,18 @@ println()
 function parse_commandline(args)
     s = ArgParseSettings(
         description = "Run ablation study for MadNLP4NN optimization",
-        epilog = "Example: julia run_opt_ablation.jl --backend flux --dataset mnist"
+        epilog = "Example: julia run_opt_ablation.jl --backend jax --dataset mnist"
     )
 
     @add_arg_table! s begin
         "--backend"
             help = "Backend to use: 'flux' or 'jax'"
             arg_type = String
-            default = "flux"
+            default = "jax"
         "--dataset"
             help = "Dataset to test: 'mnist' or 'cifar'"
             arg_type = String
-            default = "mnist"
+            default = "cifar"
         "--max-iter"
             help = "Maximum number of iterations"
             arg_type = Int
@@ -80,11 +88,11 @@ function parse_commandline(args)
         "--kkt-system"
             help = "KKT system type: 'auto', 'sparse', 'sparse_unreduced', 'sparse_condensed', 'dense', 'dense_condensed'"
             arg_type = String
-            default = "auto"
+            default = "sparse"
         "--linear-solver"
             help = "Linear solver (CPU): 'auto', 'umfpack', 'lapack_cpu', 'ma27', 'ma57', 'ma77', 'ma86', 'ma97', 'mumps', 'pardiso', 'pardiso_mkl'; (GPU): 'lapack_gpu', 'cudss', 'cucholesky', 'rf', 'glu'"
             arg_type = String
-            default = "auto"
+            default = "mumps"
         "--callback"
             help = "Callback type: 'auto', 'sparse', 'dense'"
             arg_type = String
@@ -92,7 +100,7 @@ function parse_commandline(args)
         "--blas-threads"
             help = "Number of BLAS threads"
             arg_type = Int
-            default = 1
+            default = 8
         "--disable-gc"
             help = "Disable garbage collector during solve"
             action = :store_true
@@ -154,10 +162,10 @@ const PRINT_LEVEL = PRINT_LEVEL_MAP[args["print-level"]]
 const KKT_SYSTEM_MAP = Dict(
     "auto" => nothing,
     "sparse" => MadNLP.SparseKKTSystem,
-    "sparse_unreduced" => MadNLP.SparseUnreducedKKTSystem,
-    "sparse_condensed" => MadNLP.SparseCondensedKKTSystem,
-    "dense" => MadNLP.DenseKKTSystem,
-    "dense_condensed" => MadNLP.DenseCondensedKKTSystem
+    # "sparse_unreduced" => MadNLP.SparseUnreducedKKTSystem,
+    # "sparse_condensed" => MadNLP.SparseCondensedKKTSystem,
+    # "dense" => MadNLP.DenseKKTSystem,
+    # "dense_condensed" => MadNLP.DenseCondensedKKTSystem
 )
 const KKT_SYSTEM = KKT_SYSTEM_MAP[args["kkt-system"]]
 
@@ -166,22 +174,22 @@ const LINEAR_SOLVER_MAP = Dict(
     # Auto-selection
     "auto" => nothing,
     # CPU solvers
-    "umfpack" => MadNLP.UmfpackSolver,
-    "lapack_cpu" => MadNLP.LapackCPUSolver,
-    "ma27" => MadNLP.Ma27Solver,
-    "ma57" => MadNLP.Ma57Solver,
-    "ma77" => MadNLP.Ma77Solver,
-    "ma86" => MadNLP.Ma86Solver,
-    "ma97" => MadNLP.Ma97Solver,
-    "mumps" => MadNLP.MumpsSolver,
-    "pardiso" => MadNLP.PardisoSolver,
-    "pardiso_mkl" => MadNLP.PardisoMKLSolver,
+    # "umfpack" => MadNLP.UmfpackSolver,
+    # "lapack_cpu" => MadNLP.LapackCPUSolver,
+    # "ma27" => MadNLP.Ma27Solver,
+    # "ma57" => MadNLP.Ma57Solver,
+    # "ma77" => MadNLP.Ma77Solver,
+    # "ma86" => MadNLP.Ma86Solver,
+    # "ma97" => MadNLP.Ma97Solver,
+    "mumps" => MadNLPMumps.MumpsSolver,
+    # "pardiso" => MadNLP.PardisoSolver,
+    # "pardiso_mkl" => MadNLP.PardisoMKLSolver,
     # GPU solvers (require MadNLPGPU)
-    "lapack_gpu" => GPU_AVAILABLE ? MadNLPGPU.LapackGPUSolver : nothing,
-    "cudss" => GPU_AVAILABLE ? MadNLPGPU.CUDSSSolver : nothing,
-    "cucholesky" => GPU_AVAILABLE ? MadNLPGPU.CuCholeskySolver : nothing,
-    "rf" => GPU_AVAILABLE ? MadNLPGPU.RFSolver : nothing,
-    "glu" => GPU_AVAILABLE ? MadNLPGPU.GLUSolver : nothing
+    # "lapack_gpu" => GPU_AVAILABLE ? MadNLPGPU.LapackGPUSolver : nothing,
+    # "cudss" => GPU_AVAILABLE ? MadNLPGPU.CUDSSSolver : nothing,
+    # "cucholesky" => GPU_AVAILABLE ? MadNLPGPU.CuCholeskySolver : nothing,
+    # "rf" => GPU_AVAILABLE ? MadNLPGPU.RFSolver : nothing,
+    # "glu" => GPU_AVAILABLE ? MadNLPGPU.GLUSolver : nothing
 )
 
 # Validate GPU solver selection
@@ -198,8 +206,8 @@ const LINEAR_SOLVER = LINEAR_SOLVER_MAP[args["linear-solver"]]
 # Callback mapping
 const CALLBACK_MAP = Dict(
     "auto" => nothing,
-    "sparse" => MadNLP.SparseCallback,
-    "dense" => MadNLP.DenseCallback
+    # "sparse" => MadNLP.SparseCallback,
+    # "dense" => MadNLP.DenseCallback
 )
 const CALLBACK = CALLBACK_MAP[args["callback"]]
 
@@ -235,10 +243,6 @@ const DATASET_CONFIG = Dict(
         "output_dim" => 10,
         "image_shape" => (32, 32, 3),
         "models" => [
-            "cifar10_vgg11_bn.pt",
-            "cifar10_vgg13_bn.pt",
-            "cifar10_vgg16_bn-6ee7ea24.pt",
-            "cifar10_vgg19_bn-57191229.pt",
             "cifar10_resnet20.pt",
             "cifar10_resnet32.pt",
             "cifar10_resnet44.pt",
@@ -290,6 +294,11 @@ Random.seed!(RANDOM_SEED)
 if BACKEND == "jax"
     pyimport("numpy").random.seed(RANDOM_SEED)
     pyimport("random").seed(RANDOM_SEED)
+end
+
+# Configure OpenMP threads for sparse solvers (e.g., MUMPS)
+if !haskey(ENV, "OMP_NUM_THREADS")
+    ENV["OMP_NUM_THREADS"] = string(BLAS_THREADS)
 end
 
 println("[Random Seeds Set]")
@@ -436,10 +445,6 @@ function run_single_optimization(
         )
         
         # Add optional performance-related parameters if specified
-        if KKT_SYSTEM !== nothing
-            solver_options[:kkt_system] = KKT_SYSTEM
-        end
-        
         if LINEAR_SOLVER !== nothing
             solver_options[:linear_solver] = LINEAR_SOLVER
         end
@@ -469,6 +474,13 @@ function run_single_optimization(
         
         dist_to_target = norm(nn_output - target)
         pred_class = argmax(nn_output)
+        
+        # Compute average times by category
+        avg_obj_time = timing_stats.obj_count > 0 ? timing_stats.obj_time / timing_stats.obj_count : 0.0
+        avg_grad_time = timing_stats.grad_count > 0 ? timing_stats.grad_time / timing_stats.grad_count : 0.0
+        avg_cons_time = timing_stats.cons_count > 0 ? timing_stats.cons_time / timing_stats.cons_count : 0.0
+        avg_jac_time = timing_stats.jac_count > 0 ? timing_stats.jac_time / timing_stats.jac_count : 0.0
+        avg_hess_time = timing_stats.hess_count > 0 ? timing_stats.hess_time / timing_stats.hess_count : 0.0
         
         # Generate filename
         timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
@@ -526,6 +538,38 @@ function run_single_optimization(
                     "avg_eval_time" => total_eval_time / max(timing_stats.eval_count, 1),
                     "eval_time_percentage" => 100 * total_eval_time / solve_time,
                     "madnlp_internal_percentage" => 100 * madnlp_internal_time / solve_time
+                ),
+                "by_operation" => Dict(
+                    "objective" => Dict(
+                        "count" => timing_stats.obj_count,
+                        "total_time" => timing_stats.obj_time,
+                        "avg_time" => avg_obj_time,
+                        "percentage" => 100 * timing_stats.obj_time / max(total_eval_time, 1e-10)
+                    ),
+                    "gradient" => Dict(
+                        "count" => timing_stats.grad_count,
+                        "total_time" => timing_stats.grad_time,
+                        "avg_time" => avg_grad_time,
+                        "percentage" => 100 * timing_stats.grad_time / max(total_eval_time, 1e-10)
+                    ),
+                    "constraints" => Dict(
+                        "count" => timing_stats.cons_count,
+                        "total_time" => timing_stats.cons_time,
+                        "avg_time" => avg_cons_time,
+                        "percentage" => 100 * timing_stats.cons_time / max(total_eval_time, 1e-10)
+                    ),
+                    "jacobian" => Dict(
+                        "count" => timing_stats.jac_count,
+                        "total_time" => timing_stats.jac_time,
+                        "avg_time" => avg_jac_time,
+                        "percentage" => 100 * timing_stats.jac_time / max(total_eval_time, 1e-10)
+                    ),
+                    "hessian" => Dict(
+                        "count" => timing_stats.hess_count,
+                        "total_time" => timing_stats.hess_time,
+                        "avg_time" => avg_hess_time,
+                        "percentage" => 100 * timing_stats.hess_time / max(total_eval_time, 1e-10)
+                    )
                 )
             ),
             "solution" => Dict(

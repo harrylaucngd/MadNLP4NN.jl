@@ -22,6 +22,14 @@ using Printf
 using Dates
 using PythonCall
 
+# Optionally load MUMPS sparse solver (parallel-friendly) if available
+const MUMPS_AVAILABLE = try
+    @eval using MadNLPMumps
+    true
+catch
+    false
+end
+
 # Conditionally load MadNLPGPU if needed (will be checked later based on DEVICE setting)
 const GPU_AVAILABLE = try
     @eval using MadNLPGPU
@@ -43,7 +51,7 @@ println()
 # -----------------------------------------------------------------------------
 # Model Configuration
 # -----------------------------------------------------------------------------
-const MODEL_PATH = "output/models/mnist/small_mlp/model_seed42.pt"
+const MODEL_PATH = "output/models/mnist/large_resmlp/model_seed42.pt"
 # Alternative examples:
 # const MODEL_PATH = "output/models/mnist/small_mlp/model_seed42.pt"
 # const MODEL_PATH = "output/models/fashionmnist/medium_mlp/model_seed123.pt"
@@ -52,7 +60,7 @@ const MODEL_PATH = "output/models/mnist/small_mlp/model_seed42.pt"
 # Backend Configuration
 # -----------------------------------------------------------------------------
 # Autodiff backend: "flux" (ForwardDiff) or "jax" (Python/JAX)
-const BACKEND = "flux"  # Options: "flux", "jax"
+const BACKEND = "jax"  # Options: "flux", "jax"
 
 # -----------------------------------------------------------------------------
 # Optimization Problem Configuration
@@ -121,7 +129,7 @@ const DEVICE = "cpu"
 # Options: nothing (auto-select), MadNLP.SparseKKTSystem, MadNLP.SparseUnreducedKKTSystem,
 #          MadNLP.SparseCondensedKKTSystem, MadNLP.DenseKKTSystem, MadNLP.DenseCondensedKKTSystem
 # Default (nothing): Auto-selects based on problem structure (sparse or dense)
-const KKT_SYSTEM = nothing
+const KKT_SYSTEM = MadNLP.SparseKKTSystem  # 将作为类型传递给 linear_solver 选项
 
 # Linear Solver Configuration
 # CPU Solvers:
@@ -141,7 +149,7 @@ const KKT_SYSTEM = nothing
 #   - MadNLPGPU.GLUSolver: GPU LU solver
 #
 # Default (nothing): Auto-selects based on device and KKT system
-const LINEAR_SOLVER = nothing
+const LINEAR_SOLVER = MadNLPMumps.MumpsSolver
 
 # Callback Type Configuration
 # Options: nothing (auto-select), MadNLP.SparseCallback, MadNLP.DenseCallback
@@ -149,7 +157,8 @@ const LINEAR_SOLVER = nothing
 const CALLBACK = nothing
 
 # Computational Performance Settings
-const BLAS_NUM_THREADS = 1  # Number of CPU BLAS threads (1 = single-threaded, >1 for parallel BLAS)
+const BLAS_NUM_THREADS = 1  # Number of CPU BLAS threads
+const OMP_NUM_THREADS = 8   # OpenMP threads for MUMPS or other sparse solvers
 const DISABLE_GC = false  # Disable garbage collector during solve for better timing measurements
 
 # Additional MadNLP options (add more as needed)
@@ -194,6 +203,7 @@ println("  Linear solver: $(LINEAR_SOLVER === nothing ? "auto" : LINEAR_SOLVER)"
 println("  Callback: $(CALLBACK === nothing ? "auto" : CALLBACK)")
 println("  BLAS threads: $BLAS_NUM_THREADS")
 println("  Disable GC: $DISABLE_GC")
+println("  MUMPS available: $MUMPS_AVAILABLE")
 println()
 
 # Validate GPU availability if GPU device is requested
@@ -223,6 +233,12 @@ Random.seed!(RANDOM_SEED)
 if BACKEND == "jax"
     pyimport("numpy").random.seed(RANDOM_SEED)
     pyimport("random").seed(RANDOM_SEED)
+end
+
+# Configure threading for linear solvers before building solver
+# Respect pre-set environment override
+if !haskey(ENV, "OMP_NUM_THREADS")
+    ENV["OMP_NUM_THREADS"] = string(OMP_NUM_THREADS)
 end
 
 # =============================================================================
@@ -507,10 +523,8 @@ solver_options = Dict{Symbol, Any}(
 )
 
 # Add optional performance-related parameters if specified
-if KKT_SYSTEM !== nothing
-    solver_options[:kkt_system] = KKT_SYSTEM
-end
-
+# Note: MadNLP expects linear_solver as Type, not kkt_system
+# The KKT system is auto-selected based on linear solver type
 if LINEAR_SOLVER !== nothing
     solver_options[:linear_solver] = LINEAR_SOLVER
 end
@@ -656,6 +670,13 @@ if SAVE_RESULTS
         for i in 1:min(length(per_iter_times), 1000)  # Limit to first 1000 to avoid huge files
     ]
     
+    # Compute average times by category
+    avg_obj_time = timing_stats.obj_count > 0 ? timing_stats.obj_time / timing_stats.obj_count : 0.0
+    avg_grad_time = timing_stats.grad_count > 0 ? timing_stats.grad_time / timing_stats.grad_count : 0.0
+    avg_cons_time = timing_stats.cons_count > 0 ? timing_stats.cons_time / timing_stats.cons_count : 0.0
+    avg_jac_time = timing_stats.jac_count > 0 ? timing_stats.jac_time / timing_stats.jac_count : 0.0
+    avg_hess_time = timing_stats.hess_count > 0 ? timing_stats.hess_time / timing_stats.hess_count : 0.0
+    
     # Prepare results dictionary
     results_dict = Dict(
         "timestamp" => string(Dates.now()),
@@ -709,6 +730,38 @@ if SAVE_RESULTS
                 "avg_eval_time" => avg_eval_time,
                 "eval_time_percentage" => 100 * total_eval_time / solve_time,
                 "madnlp_internal_percentage" => 100 * madnlp_internal_time / solve_time
+            ),
+            "by_operation" => Dict(
+                "objective" => Dict(
+                    "count" => timing_stats.obj_count,
+                    "total_time" => timing_stats.obj_time,
+                    "avg_time" => avg_obj_time,
+                    "percentage" => 100 * timing_stats.obj_time / max(total_eval_time, 1e-10)
+                ),
+                "gradient" => Dict(
+                    "count" => timing_stats.grad_count,
+                    "total_time" => timing_stats.grad_time,
+                    "avg_time" => avg_grad_time,
+                    "percentage" => 100 * timing_stats.grad_time / max(total_eval_time, 1e-10)
+                ),
+                "constraints" => Dict(
+                    "count" => timing_stats.cons_count,
+                    "total_time" => timing_stats.cons_time,
+                    "avg_time" => avg_cons_time,
+                    "percentage" => 100 * timing_stats.cons_time / max(total_eval_time, 1e-10)
+                ),
+                "jacobian" => Dict(
+                    "count" => timing_stats.jac_count,
+                    "total_time" => timing_stats.jac_time,
+                    "avg_time" => avg_jac_time,
+                    "percentage" => 100 * timing_stats.jac_time / max(total_eval_time, 1e-10)
+                ),
+                "hessian" => Dict(
+                    "count" => timing_stats.hess_count,
+                    "total_time" => timing_stats.hess_time,
+                    "avg_time" => avg_hess_time,
+                    "percentage" => 100 * timing_stats.hess_time / max(total_eval_time, 1e-10)
+                )
             )
         ),
         "solution" => Dict(
