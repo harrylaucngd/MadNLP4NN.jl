@@ -225,7 +225,7 @@ const DATASET_CONFIG = Dict(
             "large_mlp_seed42.pt",
             "small_resmlp_seed42.pt",
             "medium_resmlp_seed42.pt",
-            "larg_resmlp_seed42.pt"
+            "large_resmlp_seed42.pt"
         ]
     ),
     "cifar" => Dict(

@@ -471,7 +471,7 @@ use_python = (BACKEND == "jax")
 if use_python
     println("  Using Python/JAX backend for automatic differentiation")
 else
-    println("  Using Julia/Flux backend with ForwardDiff")
+    println("  Using Julia/Flux backend")
 end
 
 nlp_model = NeuralNetworkNLPModel(
