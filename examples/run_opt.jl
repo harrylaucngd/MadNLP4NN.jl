@@ -51,7 +51,7 @@ println()
 # -----------------------------------------------------------------------------
 # Model Configuration
 # -----------------------------------------------------------------------------
-const MODEL_PATH = "output/models/mnist/large_resmlp/model_seed42.pt"
+const MODEL_PATH = "output/models/mnist/small_mlp/model_seed42.pt"
 # Alternative examples:
 # const MODEL_PATH = "output/models/mnist/small_mlp/model_seed42.pt"
 # const MODEL_PATH = "output/models/fashionmnist/medium_mlp/model_seed123.pt"
@@ -60,7 +60,7 @@ const MODEL_PATH = "output/models/mnist/large_resmlp/model_seed42.pt"
 # Backend Configuration
 # -----------------------------------------------------------------------------
 # Autodiff backend: "flux" (ForwardDiff) or "jax" (Python/JAX)
-const BACKEND = "jax"  # Options: "flux", "jax"
+const BACKEND = "flux"  # Options: "flux", "jax"
 
 # -----------------------------------------------------------------------------
 # Optimization Problem Configuration

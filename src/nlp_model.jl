@@ -208,11 +208,46 @@ function _create_flux_nlp_model(
     
     # Determine dimensions
     n = length(x0)
-    m = constraint_func === nothing ? 0 : num_constraints(constraint_func)
     
-    # Set up bounds
+    # Extract box bounds and remaining constraints
+    # Treat BoxConstraints as variable bounds (lvar/uvar) instead of general constraints
+    # This matches the JAX backend behavior and is more efficient
     lvar = fill(-Inf, n)
     uvar = fill(Inf, n)
+    remaining_constraint = nothing
+    
+    if constraint_func isa BoxConstraints
+        # Box constraints -> variable bounds
+        lvar = copy(constraint_func.x_min)
+        uvar = copy(constraint_func.x_max)
+        remaining_constraint = nothing
+    elseif constraint_func isa CompositeConstraint
+        # Extract box constraints from composite
+        non_box_constraints = AbstractConstraintFunction[]
+        for c in constraint_func.constraints
+            if c isa BoxConstraints
+                lvar = copy(c.x_min)
+                uvar = copy(c.x_max)
+            else
+                push!(non_box_constraints, c)
+            end
+        end
+        
+        # Remaining constraints (non-box)
+        if length(non_box_constraints) == 0
+            remaining_constraint = nothing
+        elseif length(non_box_constraints) == 1
+            remaining_constraint = non_box_constraints[1]
+        else
+            remaining_constraint = CompositeConstraint(non_box_constraints...)
+        end
+    else
+        # Other constraint types (spherical, etc.)
+        remaining_constraint = constraint_func
+    end
+    
+    # Count only non-box constraints
+    m = remaining_constraint === nothing ? 0 : num_constraints(remaining_constraint)
     
     # Set up constraint bounds (all g(x) ≤ 0)
     lcon = fill(-Inf, m)
@@ -246,7 +281,7 @@ function _create_flux_nlp_model(
         counters,
         nn_model,
         objective_func,
-        constraint_func,
+        remaining_constraint,  # Use remaining constraint (without box)
         copy(x0),
         false,    # use_python = false
         nothing,  # python_evaluator = nothing
@@ -683,17 +718,11 @@ function NLPModels.hess_coord!(
             n = nlp.meta.nvar
             
             # Special handling for specific constraint types (optimization)
+            # Note: BoxConstraints are now handled as variable bounds (lvar/uvar),
+            # not as general constraints, so nlp.constraint_func will be nothing or non-box
             if nlp.constraint_func === nothing || nlp.meta.ncon == 0
-                # No constraints: only objective Hessian
-                obj_func = x_val -> begin
-                    nn_output = nlp.neural_network(x_val)
-                    evaluate(nlp.objective_func, x_val, nn_output)
-                end
-                hess_lag = obj_weight .* _compute_hessian(obj_func, x, nlp.ad_backend)
-                
-            elseif nlp.constraint_func isa BoxConstraints
-                # Box constraints: Hessian is zero (linear constraints)
-                # Only need objective Hessian
+                # No general constraints: only objective Hessian
+                # (Box constraints are handled as variable bounds by MadNLP)
                 obj_func = x_val -> begin
                     nn_output = nlp.neural_network(x_val)
                     evaluate(nlp.objective_func, x_val, nn_output)
@@ -717,41 +746,37 @@ function NLPModels.hess_coord!(
                 
             elseif nlp.constraint_func isa CompositeConstraint
                 # Composite constraint: check components
-                has_box = any(c -> c isa BoxConstraints, nlp.constraint_func.constraints)
+                # Note: BoxConstraints are now handled as variable bounds, so they won't appear here
                 has_sphere = any(c -> c isa SphericalConstraint, nlp.constraint_func.constraints)
-                has_other = any(c -> !(c isa BoxConstraints || c isa SphericalConstraint), 
-                               nlp.constraint_func.constraints)
+                has_other = any(c -> !(c isa SphericalConstraint), nlp.constraint_func.constraints)
                 
-                if !has_other && (has_box || has_sphere)
-                    # Only Box and/or Spherical: can use fast path
+                if !has_other && has_sphere
+                    # Only Spherical: can use fast path
                     obj_func = x_val -> begin
                         nn_output = nlp.neural_network(x_val)
                         evaluate(nlp.objective_func, x_val, nn_output)
                     end
                     hess_lag = obj_weight .* _compute_hessian(obj_func, x, nlp.ad_backend)
                     
-                    # Add spherical constraint contribution if present
-                    if has_sphere
-                        # Find spherical constraint index
-                        sphere_idx = 0
-                        current_idx = 0
-                        for c in nlp.constraint_func.constraints
-                            n_cons = num_constraints(c)
-                            if c isa SphericalConstraint
-                                sphere_idx = current_idx + 1  # Spherical has 1 constraint
-                                break
-                            end
-                            current_idx += n_cons
+                    # Add spherical constraint contribution
+                    # Find spherical constraint index
+                    sphere_idx = 0
+                    current_idx = 0
+                    for c in nlp.constraint_func.constraints
+                        n_cons = num_constraints(c)
+                        if c isa SphericalConstraint
+                            sphere_idx = current_idx + 1  # Spherical has 1 constraint
+                            break
                         end
-                        
-                        # Add contribution: λ * 2I
-                        if sphere_idx > 0 && abs(y[sphere_idx]) > 1e-12
-                            for i in 1:n
-                                hess_lag[i, i] += 2.0 * y[sphere_idx]
-                            end
+                        current_idx += n_cons
+                    end
+                    
+                    # Add contribution: λ * 2I
+                    if sphere_idx > 0 && abs(y[sphere_idx]) > 1e-12
+                        for i in 1:n
+                            hess_lag[i, i] += 2.0 * y[sphere_idx]
                         end
                     end
-                    # Box constraints contribute zero, so nothing to add
                 else
                     # General case: compute Lagrangian Hessian directly (FIXED APPROACH)
                     lagrangian_func = x_val -> begin

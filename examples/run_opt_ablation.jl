@@ -64,11 +64,11 @@ function parse_commandline(args)
         "--backend"
             help = "Backend to use: 'flux' or 'jax'"
             arg_type = String
-            default = "jax"
+            default = "flux"
         "--dataset"
             help = "Dataset to test: 'mnist' or 'cifar'"
             arg_type = String
-            default = "cifar"
+            default = "mnist"
         "--max-iter"
             help = "Maximum number of iterations"
             arg_type = Int

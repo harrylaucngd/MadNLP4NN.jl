@@ -262,8 +262,8 @@ result = solve_nlp(nlp)
 
 ```
 MadNLP4NN.jl/
-├── Project.toml                # Julia package definition
-├── README.md                   # This file
+├── Project.toml               # Julia package definition
+├── README.md                  # This file
 ├── src/
 │   ├── MadNLP4NN.jl           # Main module (exports)
 │   ├── python_interface.jl    # Julia → Python bridge (training, datasets)
@@ -274,15 +274,14 @@ MadNLP4NN.jl/
 │   ├── dataset_constructor.py # Dataset generation
 │   ├── neural_network.py      # Network architectures (MLP, ResidualMLP)
 │   ├── trainer.py             # Training with hyperparameter search
-│   ├── jax_nn_evaluator.py   # JAX backend evaluator
+│   ├── jax_nn_evaluator.py    # JAX backend evaluator
 │   └── main.py                # CLI entry point
 ├── examples/
-│   ├── basic_usage.jl         # Basic examples
-│   ├── dataset_all.jl         # Generate all datasets
+│   ├── create_dataset_all.jl  # Generate all datasets
 │   ├── train_all.jl           # Train all combinations
 │   ├── run_opt.jl             # Configurable optimization script
 │   └── run_opt_ablation.jl    # Ablation study script
-└── output/                     # Generated data and models
+└── output/                    # Generated data and models
     ├── datasets/              # Saved datasets
     ├── models/                # Trained models
     └── optimization_results/  # Optimization results (JSON)
