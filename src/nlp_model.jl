@@ -9,6 +9,7 @@ using Flux
 using ForwardDiff
 using LinearAlgebra
 using Zygote
+using SparseArrays
 
 # ============================================================================
 # Timing Statistics
@@ -964,5 +965,307 @@ function create_simple_nlp(
     end
     
     return NeuralNetworkNLPModel(model_path, obj, cons, x0; use_python=use_python, ad_backend=ad_backend)
+end
+
+
+# ============================================================================
+# ProblemSpec-based NLP construction
+# ============================================================================
+
+"""
+    NeuralNetworkNLPModel(spec::ProblemSpec; device="cpu", kwargs...)
+
+Construct an NLP model from a high-level `ProblemSpec`. This is the
+recommended constructor for the Darcy inversion and Pareto tracing case
+studies.
+
+# Arguments
+- `spec`: ProblemSpec describing the problem (networks, objectives, constraints)
+- `device`: Execution device for Python/JAX backend ("cpu" or "gpu")
+- `kwargs...`: Additional keyword arguments passed to the underlying constructor
+
+# Notes
+- Always uses the Python/JAX backend (required for multi-network problems)
+- The `problem_type` field of `spec` selects the appropriate Python evaluator
+"""
+function NeuralNetworkNLPModel(spec::ProblemSpec; device::String="cpu", kwargs...)
+    @info "Creating NLP model from ProblemSpec (type=$(spec.problem_type))"
+    return _create_spec_nlp_model(spec, device)
+end
+
+
+"""
+    _create_spec_nlp_model(spec, device)
+
+Internal: build NeuralNetworkNLPModel from a ProblemSpec using the
+Python/JAX backend.
+"""
+function _create_spec_nlp_model(spec::ProblemSpec, device::String)
+    setup_python_env()
+    jax_evaluator_module = pyimport("jax_nn_evaluator")
+
+    n = spec.n
+
+    # Extract constraint count.  LearnedFeasibilityConstraint counts handled
+    # by the Python backend which also knows about box constraints.
+    remaining_constraint, lvar, uvar = _extract_bounds_and_remaining(
+        spec.constraints, n, spec.x_lb, spec.x_ub
+    )
+
+    # Determine m (number of general inequality constraints)
+    m_julia = remaining_constraint === nothing ? 0 : num_constraints(remaining_constraint)
+
+    # Dispatch to appropriate Python evaluator factory
+    py_eval = _build_python_evaluator(jax_evaluator_module, spec, device, remaining_constraint)
+
+    # m from Python evaluator takes priority (it may add its own constraints)
+    m = pyconvert(Int, py_eval.m)
+
+    lcon = fill(-Inf, m)
+    ucon = fill(0.0, m)
+
+    meta = NLPModelMeta(
+        n,
+        x0=copy(spec.x0),
+        lvar=lvar,
+        uvar=uvar,
+        ncon=m,
+        lcon=lcon,
+        ucon=ucon,
+        nnzj=m * n,
+        nnzh=div(n * (n + 1), 2),
+        minimize=true,
+    )
+
+    counters = Counters()
+    timing_stats = TimingStats()
+
+    return NeuralNetworkNLPModel(
+        meta,
+        counters,
+        nothing,           # neural_network (Python backend)
+        spec.objective,
+        remaining_constraint,
+        copy(spec.x0),
+        true,              # use_python
+        py_eval,
+        timing_stats,
+        :forwarddiff,      # ad_backend (unused for Python)
+    )
+end
+
+
+"""
+    _extract_bounds_and_remaining(constraint_func, n, x_lb, x_ub)
+
+Merge ProblemSpec box bounds with any BoxConstraints found inside the
+constraint tree, returning (remaining_constraint, lvar, uvar).
+"""
+function _extract_bounds_and_remaining(constraint_func, n, x_lb, x_ub)
+    lvar = copy(x_lb)
+    uvar = copy(x_ub)
+    remaining = nothing
+
+    if constraint_func === nothing
+        return nothing, lvar, uvar
+    elseif constraint_func isa BoxConstraints
+        # Tighten bounds
+        lvar .= max.(lvar, constraint_func.x_min)
+        uvar .= min.(uvar, constraint_func.x_max)
+        return nothing, lvar, uvar
+    elseif constraint_func isa CompositeConstraint
+        non_box = AbstractConstraintFunction[]
+        for c in constraint_func.constraints
+            if c isa BoxConstraints
+                lvar .= max.(lvar, c.x_min)
+                uvar .= min.(uvar, c.x_max)
+            else
+                push!(non_box, c)
+            end
+        end
+        remaining = if isempty(non_box)
+            nothing
+        elseif length(non_box) == 1
+            non_box[1]
+        else
+            CompositeConstraint(non_box...)
+        end
+        return remaining, lvar, uvar
+    else
+        return constraint_func, lvar, uvar
+    end
+end
+
+
+"""
+    _build_python_evaluator(mod, spec, device, remaining_constraint)
+
+Dispatch to the correct Python evaluator factory based on spec.problem_type.
+"""
+function _build_python_evaluator(mod, spec::ProblemSpec, device::String, remaining_constraint)
+    ptype = spec.problem_type
+
+    if ptype == "darcy"
+        return _build_darcy_evaluator(mod, spec, device, remaining_constraint)
+    elseif ptype == "pareto"
+        return _build_pareto_evaluator(mod, spec, device, remaining_constraint)
+    else
+        # Generic / classification path
+        return _build_generic_evaluator(mod, spec, device, remaining_constraint)
+    end
+end
+
+
+function _build_generic_evaluator(mod, spec::ProblemSpec, device::String, remaining_constraint)
+    @assert length(spec.network_paths) == 1 "Generic evaluator requires exactly one network"
+    model_path = spec.network_paths[1]
+
+    # Extract target and regularization from objective
+    target, reg_weight, reg_center = _unpack_inversion_objective(spec.objective, spec.x0)
+
+    # Extract spherical radius if present
+    radius = _extract_sphere_radius(remaining_constraint)
+
+    return mod.create_evaluator(
+        model_path,
+        target,
+        spec.x0;
+        objective_weight=1.0,
+        regularization_weight=reg_weight,
+        radius=radius,
+        device=device,
+    )
+end
+
+
+function _build_darcy_evaluator(mod, spec::ProblemSpec, device::String, remaining_constraint)
+    @assert length(spec.network_paths) >= 1 "Darcy evaluator requires at least one FNO network"
+    model_path = spec.network_paths[1]
+
+    target, reg_weight, _ = _unpack_inversion_objective(spec.objective, spec.x0)
+
+    # Extract budget and smoothness constraint parameters
+    budget = nothing
+    tau = nothing
+    L_flat = nothing
+    L_n = 0
+
+    for c in _flatten_constraints(remaining_constraint)
+        if c isa BudgetConstraint
+            budget = c.budget
+        elseif c isa SmoothnessConstraint
+            tau = c.tau
+            L_flat = vec(c.L)
+            L_n = size(c.L, 1)
+        end
+    end
+
+    return mod.create_darcy_evaluator(
+        model_path,
+        target,
+        spec.x0;
+        regularization_weight=reg_weight,
+        budget=budget,
+        tau=tau,
+        L_flat=L_flat,
+        L_n=L_n,
+        device=device,
+    )
+end
+
+
+function _build_pareto_evaluator(mod, spec::ProblemSpec, device::String, remaining_constraint)
+    @assert length(spec.network_paths) >= 2 "Pareto evaluator requires at least 2 networks"
+
+    @assert spec.objective isa WeightedScalarizationObjective "Pareto problems need WeightedScalarizationObjective"
+    alpha = spec.objective.alpha
+
+    has_feasibility = any(
+        c -> c isa LearnedFeasibilityConstraint,
+        _flatten_constraints(remaining_constraint)
+    )
+    f3_path = length(spec.network_paths) >= 3 ? spec.network_paths[3] : nothing
+
+    return mod.create_pareto_evaluator(
+        spec.network_paths[1],
+        spec.network_paths[2],
+        spec.x0;
+        f3_path=f3_path,
+        alpha=alpha,
+        device=device,
+    )
+end
+
+
+# ============================================================================
+# Helpers for objective/constraint inspection
+# ============================================================================
+
+function _unpack_inversion_objective(obj::AbstractObjectiveFunction, x0)
+    if obj isa NeuralNetworkObjective
+        return obj.target, 0.0, x0
+    elseif obj isa SurrogateInversionObjective
+        return obj.target, obj.reg_weight, obj.x0
+    elseif obj isa CompositeObjective
+        target = nothing
+        reg_weight = 0.0
+        for sub in obj.objectives
+            if sub isa NeuralNetworkObjective
+                target = sub.target
+            elseif sub isa SurrogateInversionObjective
+                target = sub.target
+                reg_weight += sub.reg_weight
+            elseif sub isa QuadraticRegularization
+                reg_weight += sub.weight
+            end
+        end
+        target === nothing && error("Cannot find a target-based objective in CompositeObjective")
+        return target, reg_weight, x0
+    else
+        error("Unsupported objective type for Python backend: $(typeof(obj))")
+    end
+end
+
+function _extract_sphere_radius(cons)
+    cons === nothing && return nothing
+    if cons isa SphericalConstraint
+        return cons.radius
+    elseif cons isa CompositeConstraint
+        for c in cons.constraints
+            c isa SphericalConstraint && return c.radius
+        end
+    end
+    return nothing
+end
+
+function _flatten_constraints(cons)
+    cons === nothing && return AbstractConstraintFunction[]
+    cons isa CompositeConstraint && return cons.constraints
+    return [cons]
+end
+
+
+# ============================================================================
+# Solver backend selection utilities
+# ============================================================================
+
+"""
+    select_linear_solver(device::String)
+
+Return the recommended MadNLP linear solver type for the given device
+("cpu" or "gpu").  Returns `nothing` on "cpu" to let MadNLP auto-select
+Umfpack, or the GPU solver type when MadNLPGPU is available.
+"""
+function select_linear_solver(device::String)
+    if device == "gpu"
+        # Check whether MadNLPGPU is loaded
+        if isdefined(Main, :MadNLPGPU)
+            @info "GPU device: using MadNLPGPU.LapackGPUSolver"
+            return Main.MadNLPGPU.LapackGPUSolver
+        else
+            @warn "GPU device requested but MadNLPGPU is not loaded; falling back to CPU solver"
+        end
+    end
+    return nothing  # let MadNLP pick (Umfpack on CPU)
 end
 

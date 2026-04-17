@@ -23,6 +23,7 @@ using MadNLP
 using Flux
 using LinearAlgebra
 using ForwardDiff
+using SparseArrays
 
 # ============================================================================
 # Smoothed Activation Functions
@@ -389,5 +390,34 @@ function num_constraints(cons::CompositeConstraint)
 end
 
 
-# Continued in next part...
 
+# ============================================================================
+# Hessian contribution helpers (used in nlp_model.jl)
+# ============================================================================
+
+"""
+    hessian_contribution(cons, x, lambda)
+
+Return the n×n dense Hessian contribution `λ ∇²g(x)` for a constraint
+whose Hessian is known in closed form, or `nothing` when the contribution
+must be computed via AD.
+
+Specializations are provided for:
+- `SphericalConstraint`: `2λI`
+- Other types return `nothing` → AD fallback.
+"""
+hessian_contribution(::AbstractConstraintFunction, ::AbstractVector, ::Real) = nothing
+
+function hessian_contribution(cons::SphericalConstraint, ::AbstractVector, lambda::Real)
+    # ∇²g(x) = 2I, contribution = 2λI
+    return 2.0 * Float64(lambda)  # scalar sentinel meaning 2λ·I
+end
+
+"""
+    has_closed_form_hessian(cons)
+
+Return true when `cons` has a closed-form (analytic) Hessian contribution
+and the `hessian_contribution` specialization applies.
+"""
+has_closed_form_hessian(::AbstractConstraintFunction) = false
+has_closed_form_hessian(::SphericalConstraint) = true

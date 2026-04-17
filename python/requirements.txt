@@ -8,7 +8,13 @@ tqdm>=4.65.0
 tensorboard>=2.13.0
 pandas>=2.0.0
 optuna>=3.3.0
+scipy>=1.10.0
 
-# JAX for neural network evaluation and automatic differentiation (optional backend)
+# JAX for neural network evaluation and automatic differentiation
+# For CPU:  pip install "jax[cpu]"
+# For NVIDIA GPU: pip install "jax[cuda12]"
 jax>=0.4.0
 jaxlib>=0.4.0
+
+# Optional: FNO training (Darcy case study)
+optax>=0.1.7

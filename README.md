@@ -1,473 +1,262 @@
 # MadNLP4NN.jl
 
-A Julia/Python framework for constrained optimization on neural networks using MadNLP, featuring dual evaluation backends and flexible automatic differentiation.
+A GPU-oriented reduced-space interior-point framework for constrained optimization over trained neural networks, with two proposal-aligned validation case studies.
 
 ## Overview
 
-MadNLP4NN.jl enables solving constrained optimization problems involving trained neural networks by formulating them as nonlinear programs (NLP) and solving with MadNLP, a GPU-capable second-order interior-point solver.
+MadNLP4NN.jl solves nonlinear programs of the form
 
-**Problem Formulation:**
 ```
-minimize   f(x, θ)
-subject to g(x) ≤ 0
-```
-
-where:
-- `x ∈ ℝⁿ`: decision variables (optimization inputs)
-- `θ`: neural network parameters (trained weights)
-- `f(x, θ)`: objective function combining neural network output with custom expressions
-- `g(x) ≤ 0`: constraint functions (box constraints, spherical constraints, or custom)
-
-**Key Capabilities:**
-- **Dual Evaluation Backends**: Julia/Flux or Python/JAX for neural network evaluation
-- **Multiple AD Backends**: ForwardDiff (small-scale), Zygote (medium-scale), or JAX (large-scale)
-- **Modular Problem Formulation**: Composable objectives and constraints
-- **Advanced Solver Configuration**: Multiple linear solvers, KKT systems, GPU support
-- **Smooth ReLU Approximation**: Ensures differentiability for second-order methods
-- **Comprehensive Model Training**: PyTorch-based training with hyperparameter optimization
-
-## Features
-
-### Neural Network Evaluation Backends
-
-**1. Julia/Flux Backend (Default)**
-- **Neural Network**: Flux.jl inference
-- **Automatic Differentiation**: 
-  - ForwardDiff: Best for `n < 100` (simple, stable)
-  - Zygote: Best for `100 ≤ n < 500` (forward-over-reverse mode, 5-10× faster)
-- **Advantages**: Pure Julia, no Python overhead during optimization
-- **Use Case**: General-purpose, ideal for medium-scale problems
-
-**2. Python/JAX Backend (Optional)**
-- **Neural Network**: JAX inference
-- **Automatic Differentiation**: JAX native AD
-- **Advantages**: Cross-validation, GPU acceleration via JAX, optimal for `n > 500`
-- **Use Case**: Large-scale problems, validation, Python ecosystem integration
-
-Both backends use the same MadNLP solver; the difference is only in how neural network evaluations and derivatives are computed.
-
-### MadNLP Solver Configuration
-
-**Linear Solvers:**
-- **CPU**: Umfpack, Lapack, HSL (Ma27/57/77/86/97), MUMPS, Pardiso
-- **GPU**: LapackGPU, CuCholesky, CUDSS, RF, GLU (requires MadNLPGPU)
-
-**KKT Systems:**
-- Sparse, SparseUnreduced, SparseCondensed
-- Dense, DenseCondensed
-- Automatic selection based on problem structure
-
-**Performance Options:**
-- Multi-threaded BLAS
-- Garbage collection control
-- Custom convergence tolerances
-- GPU acceleration
-
-### Problem Formulation
-
-**Objective Functions:**
-- `NeuralNetworkObjective`: Minimize distance to target output
-- `QuadraticRegularization`: Regularization term
-- `CompositeObjective`: Weighted combination of objectives
-
-**Constraint Functions:**
-- `BoxConstraints`: Element-wise bounds `x_min ≤ x ≤ x_max`
-- `SphericalConstraint`: L2 ball `‖x - center‖² ≤ radius²`
-- `CompositeConstraint`: Multiple constraints combined
-
-### Training Pipeline (Python/PyTorch)
-
-- **Datasets**: Gaussian mixture, nonlinear manifold, MNIST, Fashion-MNIST, CIFAR-10
-- **Architectures**: MLP, Residual MLP (configurable sizes: small/medium/large)
-- **Hyperparameter Search**: Optuna-based automated tuning
-- **Activation**: ReLU (converted to smooth ReLU for optimization)
-
-## Installation
-
-### Prerequisites
-- Julia 1.9 or later
-- Python 3.8 or later
-- CUDA (optional, for GPU acceleration)
-
-### Step 1: Clone Repository
-```bash
-git clone <repository-url> MadNLP4NN.jl
-cd MadNLP4NN.jl
+min_{x ∈ ℝⁿ}  F(x, N_θ(x))
+subject to    c(x, N_θ(x)) ≤ 0,   ℓ ≤ x ≤ u
 ```
 
-### Step 2: Install Python Dependencies
-```bash
-# Using conda (recommended)
-conda create -n madnlp4nn python=3.10
-conda activate madnlp4nn
-pip install -r python/requirements.txt
+where `N_θ` is one or more fixed trained neural networks and `x` is the decision variable.  The optimization methodology is fixed: a **reduced-space interior-point solver** (MadNLP.jl) with derivatives supplied by a **JIT-compiled JAX backend** through PythonCall.jl, with a Julia/Flux+Zygote fallback.
 
-# Or using venv
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r python/requirements.txt
-```
+Two structured case studies from the accompanying proposal are fully implemented:
 
-### Step 3: Install Julia Package
-```julia
-using Pkg
-Pkg.activate(".")
-Pkg.instantiate()
-```
+| Case Study | Problem | Key constraints |
+|---|---|---|
+| **I: Darcy Inversion** | Recover permeability field from FNO pressure surrogate | box + budget (1ᵀx ≤ B) + smoothness (xᵀLx ≤ τ) |
+| **II: Pareto Tracing** | Weighted-sum constrained front over learned f₁, f₂, h | learned feasibility h(x) ≤ 0 |
 
-### Step 4: Configure PythonCall
-```julia
-using PythonCall
+## Key Capabilities
 
-# Option A: Use your conda/venv Python
-ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
-ENV["JULIA_PYTHONCALL_EXE"] = "/path/to/your/python"  # Replace with your Python path
-
-# Option B: Let PythonCall manage its own environment (simpler)
-# Just skip the ENV settings above
-```
-
-**Tip**: Add these ENV settings to `~/.julia/config/startup.jl` for persistence.
-
-### Optional: GPU Support
-For GPU-accelerated solving, install MadNLPGPU:
-```julia
-using Pkg
-Pkg.add("MadNLPGPU")
-```
-
-## Quick Start
-
-### Example 1: Train a Model
-```julia
-using MadNLP4NN
-
-# Train a model on MNIST
-results = train_model(
-    dataset_type="mnist",
-    model_config="medium_mlp",
-    epochs=50,
-    batch_size=128,
-    seed=42
-)
-```
-
-### Example 2: Optimization with Julia/Flux Backend
-```julia
-using MadNLP4NN
-
-# Load trained model
-model_path = "output/models/mnist/small_mlp/model_seed42.pt"
-
-# Define problem
-input_dim = 784
-output_dim = 10
-target = zeros(output_dim)
-target[1] = 1.0  # Target class 1
-x0 = randn(input_dim) .* 0.1
-
-# Create NLP with box constraints (default: Zygote AD)
-nlp = create_simple_nlp(
-    model_path,
-    target,
-    x0,
-    bounds=(-1.0, 1.0),
-    use_python=false  # Use Julia/Flux backend
-)
-
-# Solve with MadNLP
-result = solve_nlp(nlp, max_iter=1000, tol=1e-4)
-
-println("Status: ", result[:status])
-println("Objective: ", result[:objective])
-```
-
-### Example 3: Optimization with Python/JAX Backend
-```julia
-using MadNLP4NN
-
-# Same problem as Example 2, but using Python/JAX
-nlp_jax = create_simple_nlp(
-    model_path,
-    target,
-    x0,
-    bounds=(-1.0, 1.0),
-    use_python=true  # Use Python/JAX backend
-)
-
-result_jax = solve_nlp(nlp_jax, max_iter=1000, tol=1e-4)
-```
-
-### Example 4: Choosing AD Backend (Julia/Flux)
-```julia
-using MadNLP4NN
-
-# ForwardDiff: Best for n < 100
-nlp_fd = create_simple_nlp(
-    model_path, target, x0,
-    bounds=(-1.0, 1.0),
-    ad_backend=:forwarddiff
-)
-
-# Zygote: Best for 100 ≤ n < 500 (default)
-nlp_zygote = create_simple_nlp(
-    model_path, target, x0,
-    bounds=(-1.0, 1.0),
-    ad_backend=:zygote
-)
-```
-
-### Example 5: Advanced Solver Configuration
-```julia
-using MadNLP4NN
-using MadNLP
-
-# Create NLP
-nlp = create_simple_nlp(model_path, target, x0, bounds=(-1.0, 1.0))
-
-# Solve with custom solver options
-result = solve_nlp(
-    nlp,
-    max_iter=2000,
-    tol=1e-6,
-    print_level=MadNLP.INFO,
-    linear_solver=MadNLP.UmfpackSolver,
-    kkt_system=MadNLP.SparseKKTSystem,
-    blas_num_threads=4
-)
-```
-
-### Example 6: Composite Objectives and Constraints
-```julia
-using MadNLP4NN
-
-# Custom composite objective
-obj = CompositeObjective(
-    NeuralNetworkObjective(target, weight=1.0),
-    QuadraticRegularization(x0, weight=0.01)
-)
-
-# Composite constraints
-cons = CompositeConstraint(
-    BoxConstraints(fill(-2.0, input_dim), fill(2.0, input_dim)),
-    SphericalConstraint(x0, radius=10.0)
-)
-
-# Create and solve NLP
-nlp = NeuralNetworkNLPModel(model_path, obj, cons, x0)
-result = solve_nlp(nlp)
-```
+- **Reduced-space NLP**: KKT system size depends only on the decision variable dimension, not the network size
+- **Dual AD backends**: Python/JAX (primary, GPU-capable, JIT-compiled) and Julia/Flux+Zygote (baseline)
+- **Explicit CPU/NVIDIA GPU paths**: single `device="cpu"|"gpu"` flag controls both JAX device and MadNLP linear solver selection
+- **Composable problem types**: `ProblemSpec` decouples network paths, objectives, and constraints from the solver
+- **New constraint types**: `BudgetConstraint`, `SmoothnessConstraint`, `LearnedFeasibilityConstraint`
+- **New objective types**: `SurrogateInversionObjective`, `WeightedScalarizationObjective`
+- **FNO2D in JAX**: pure functional implementation supporting checkpoint loading from our format and neuraloperator-style checkpoints
 
 ## Project Structure
 
 ```
 MadNLP4NN.jl/
-├── Project.toml               # Julia package definition
-├── README.md                  # This file
+├── Project.toml
+├── README.md
+├── startup.jl
+├── configs/
+│   ├── darcy_config.toml          # Darcy case study configuration
+│   └── pareto_config.toml         # Pareto tracing configuration
 ├── src/
-│   ├── MadNLP4NN.jl           # Main module (exports)
-│   ├── python_interface.jl    # Julia → Python bridge (training, datasets)
-│   ├── nlp_interface.jl       # Objective/constraint definitions, model loading
-│   └── nlp_model.jl           # NLPModels implementation, solver interface
+│   ├── MadNLP4NN.jl               # Main module
+│   ├── nlp_interface.jl           # Objectives, constraints, model loading
+│   ├── problem_spec.jl            # ProblemSpec + new types + Laplacian helpers
+│   ├── nlp_model.jl               # NeuralNetworkNLPModel, ProblemSpec constructor
+│   ├── python_interface.jl        # Julia → Python bridge (training)
+│   ├── darcy_problem.jl           # DarcyProblemConfig + staged constructors
+│   └── pareto_problem.jl          # ParetoProblemConfig + sweep + quality metrics
 ├── python/
-│   ├── requirements.txt       # Python dependencies
-│   ├── dataset_constructor.py # Dataset generation
-│   ├── neural_network.py      # Network architectures (MLP, ResidualMLP)
-│   ├── trainer.py             # Training with hyperparameter search
-│   ├── jax_nn_evaluator.py    # JAX backend evaluator
-│   └── main.py                # CLI entry point
+│   ├── jax_nn_evaluator.py        # Backward-compatible facade + factory functions
+│   ├── darcy_data.py              # Darcy data generation + FNO training
+│   ├── pareto_data.py             # Pareto surrogate data + training
+│   ├── backend/
+│   │   ├── device.py              # DeviceManager (CPU / NVIDIA GPU)
+│   │   └── model_loader.py        # Unified checkpoint → JAX loader
+│   ├── evaluators/
+│   │   ├── base.py                # BaseEvaluator interface
+│   │   ├── standard.py            # Single-network target-matching
+│   │   ├── multi_network.py       # Multi-network Pareto evaluator
+│   │   └── darcy.py               # FNO inversion evaluator
+│   └── models/
+│       ├── mlp.py                 # MLP / ResMLP builders
+│       ├── resnet.py              # CIFAR-style ResNet builder
+│       └── fno.py                 # FNO2D builder (new)
 ├── examples/
-│   ├── create_dataset_all.jl  # Generate all datasets
-│   ├── train_all.jl           # Train all combinations
-│   ├── run_opt.jl             # Configurable optimization script
-│   └── run_opt_ablation.jl    # Ablation study script
-└── output/                    # Generated data and models
-    ├── datasets/              # Saved datasets
-    ├── models/                # Trained models
-    └── optimization_results/  # Optimization results (JSON)
+│   ├── run_opt.jl                 # Configurable single-run (original)
+│   ├── run_opt_ablation.jl        # Classification ablation study (original)
+│   ├── run_darcy_inversion.jl     # Case Study I: staged Darcy experiments
+│   ├── run_pareto_tracing.jl      # Case Study II: Pareto sweep
+│   ├── run_benchmarks.jl          # Unified CPU/GPU benchmark harness
+│   ├── create_dataset_all.jl
+│   ├── train_all.jl
+│   └── train_all_parallel.jl
+└── test/
+    └── runtests.jl                # Regression + correctness tests
 ```
 
-## NLP Formulation Details
+## Installation
 
-### Smooth ReLU Activation
-To ensure differentiability everywhere (required for second-order methods), ReLU activations are replaced with a smooth approximation:
+### Prerequisites
+- Julia 1.9+
+- Python 3.9+ with JAX, PyTorch, NumPy, SciPy
+- CUDA (optional, for NVIDIA GPU paths)
 
-```
-smooth_relu(x; α=1e-3) = α · log(1 + exp(x/α))
-```
-
-For small α, this behaves like ReLU but is C^∞ smooth. This enables Hessian computation via automatic differentiation.
-
-### Objective Function Interface
-All objectives implement:
+### Step 1: Julia packages
 ```julia
-evaluate(obj::AbstractObjectiveFunction, x::Vector, nn_output::Vector) → Float64
+using Pkg; Pkg.activate("."); Pkg.instantiate()
 ```
 
-**Example**: Neural network objective minimizes squared distance to target:
-```
-f(x) = ‖nn(x) - target‖²
+### Step 2: Python dependencies
+```bash
+pip install -r python/requirements.txt
+# For GPU JAX:
+pip install "jax[cuda12]"
+# For FNO training:
+pip install optax
 ```
 
-### Constraint Function Interface
-All constraints implement:
+### Step 3: Configure PythonCall
 ```julia
-evaluate(cons::AbstractConstraintFunction, x::Vector) → Vector{Float64}  # g(x) ≤ 0
-num_constraints(cons::AbstractConstraintFunction) → Int
-```
-
-**Example**: Box constraints are formulated as:
-```
-g(x) = [x - x_max; x_min - x]  (all components ≤ 0)
-```
-
-### Automatic Differentiation
-The framework computes:
-- **Gradient**: `∇f(x)` via ForwardDiff, Zygote, or JAX
-- **Jacobian**: `∇g(x)` via ForwardDiff or JAX
-- **Hessian**: `∇²L(x, λ)` where `L(x, λ) = σ·f(x) + λᵀ·g(x)` is the Lagrangian
-
-**Optimization**: For box and spherical constraints, specialized Hessian computation exploits their simple structure (linear or quadratic).
-
-### NLPModels Integration
-The `NeuralNetworkNLPModel` implements the full NLPModels.jl interface:
-- `obj(nlp, x)`: Objective value
-- `grad!(nlp, x, g)`: Objective gradient
-- `cons!(nlp, x, c)`: Constraint values
-- `jac_coord!(nlp, x, vals)`: Jacobian (coordinate format)
-- `hess_coord!(nlp, x, y, vals)`: Hessian of Lagrangian (coordinate format)
-
-This makes it compatible with any NLPModels-based solver, though MadNLP is recommended for performance.
-
-## Backend Selection Guide
-
-| Problem Size | Input Dimension | Recommended Backend | AD Method | Rationale |
-|--------------|-----------------|---------------------|-----------|-----------|
-| Small | n < 100 | Julia/Flux | ForwardDiff | Simple, stable, sufficient speed |
-| Medium | 100 ≤ n < 500 | Julia/Flux | **Zygote** | Forward-over-reverse 5-10× faster |
-| Large | n ≥ 500 | Python/JAX | JAX AD | Optimal for large-scale, GPU support |
-
-**All backends use the same MadNLP solver.** The backend only affects neural network evaluation and derivative computation.
-
-## Model Architectures
-
-### MLP (Multi-Layer Perceptron)
-- **small_mlp**: [128, 64] hidden layers
-- **medium_mlp**: [256, 128, 64] hidden layers
-- **large_mlp**: [512, 256, 128, 64] hidden layers
-
-### Residual MLP
-- **small_resmlp**: 128-dim, 2 residual blocks
-- **medium_resmlp**: 256-dim, 4 residual blocks
-- **large_resmlp**: 512-dim, 6 residual blocks
-
-All networks use ReLU activation (converted to smooth ReLU during optimization).
-
-## Datasets
-
-### Synthetic Datasets
-1. **Gaussian Mixture**: High-dimensional, multi-modal distributions
-   - Parameters: `n_samples`, `input_dim`, `output_dim`, `n_components`
-   
-2. **Nonlinear Manifold**: Data on nonlinear manifolds in high-dimensional space
-   - Parameters: `ambient_dim`, `manifold_dim`, `nonlinearity` (polynomial/trigonometric/mixed)
-
-### Real Datasets
-- **MNIST**: 28×28 grayscale handwritten digits (784-dim)
-- **Fashion-MNIST**: 28×28 grayscale fashion items (784-dim)
-- **CIFAR-10**: 32×32 RGB images (3072-dim)
-
-All real datasets are automatically downloaded and flattened.
-
-## Example Workflows
-
-### Workflow 1: Train and Optimize
-```julia
-using MadNLP4NN
-
-# Step 1: Train a model
-train_model(
-    dataset_type="mnist",
-    model_config="medium_mlp",
-    epochs=50,
-    seed=42
-)
-
-# Step 2: Define optimization problem
-model_path = "output/models/mnist/medium_mlp/model_seed42.pt"
-target = zeros(10); target[1] = 1.0
-x0 = randn(784) .* 0.1
-
-# Step 3: Solve
-nlp = create_simple_nlp(model_path, target, x0, bounds=(-1.0, 1.0))
-result = solve_nlp(nlp, max_iter=1000, tol=1e-4)
-```
-
-### Workflow 2: Compare Backends
-```julia
-using MadNLP4NN
-
-# Create problem
-model_path = "output/models/mnist/medium_mlp/model_seed42.pt"
-target = zeros(10); target[1] = 1.0
-x0 = randn(784) .* 0.1
-
-# Solve with Julia/Flux (Zygote)
-nlp_flux = create_simple_nlp(model_path, target, x0, bounds=(-1.0, 1.0), use_python=false)
-result_flux = solve_nlp(nlp_flux, max_iter=1000, tol=1e-4)
-
-# Solve with Python/JAX
-nlp_jax = create_simple_nlp(model_path, target, x0, bounds=(-1.0, 1.0), use_python=true)
-result_jax = solve_nlp(nlp_jax, max_iter=1000, tol=1e-4)
-
-# Compare results
-println("Flux objective: ", result_flux[:objective])
-println("JAX objective: ", result_jax[:objective])
-```
-
-### Workflow 3: Batch Training
-```julia
-using MadNLP4NN
-
-# Train all combinations
-results = train_all_combinations(
-    dataset_types=["mnist", "fashionmnist"],
-    model_configs=["small_mlp", "medium_mlp"],
-    epochs=50,
-    run_hparam_search=true,
-    n_trials=30
-)
-```
-
-## Troubleshooting
-
-### PythonCall Configuration
-If you encounter Python import errors:
-```julia
-using PythonCall
+# In startup.jl or before using MadNLP4NN:
 ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
 ENV["JULIA_PYTHONCALL_EXE"] = "/path/to/your/python"
 ```
 
-### GPU Solver Not Found
-For GPU solvers, ensure you have:
+### Step 4 (optional): GPU solver
 ```julia
-using Pkg
-Pkg.add("MadNLPGPU")
+using Pkg; Pkg.add("MadNLPGPU")
 ```
-And a CUDA-capable GPU with appropriate drivers.
 
-### NaN/Inf in Gradients
-- Check that your initial point `x0` is reasonable
-- Reduce smoothing parameter: `smooth_relu(x; α=1e-4)`
-- Use a smaller tolerance: `solve_nlp(nlp, tol=1e-3)`
+## Quick Start
+
+### Run tests
+```julia
+using Pkg; Pkg.test()
+```
+
+### Case Study I: Darcy FNO Inversion
+```julia
+# Stage A only (auto-trains a small FNO if no checkpoint found)
+julia examples/run_darcy_inversion.jl --stage A --grid 32
+
+# All stages with an existing FNO checkpoint
+julia examples/run_darcy_inversion.jl --stage all --grid 64 \
+    --fno_path output/darcy/models/fno_darcy_64x64_dv32_seed42.npz
+```
+
+### Case Study II: Pareto Tracing
+```julia
+# Stage B coarse sweep (auto-trains surrogates)
+julia examples/run_pareto_tracing.jl --stage B --n_dim 20
+
+# Stage C dense sweep + multi-start
+julia examples/run_pareto_tracing.jl --stage C --n_dim 20 --n_alpha 21 --n_starts 5
+```
+
+### Unified Benchmark
+```julia
+# Quick smoke test
+julia examples/run_benchmarks.jl --quick
+
+# Full benchmark on CPU
+julia examples/run_benchmarks.jl --case all --device cpu
+
+# Both CPU and GPU
+julia examples/run_benchmarks.jl --case all --device both
+```
+
+## Programmatic API
+
+### Darcy Inversion (Stage A)
+```julia
+using MadNLP4NN
+
+cfg = DarcyProblemConfig(
+    "output/darcy/models/fno_darcy_64x64_dv32_seed42.npz",
+    target_pressure,   # Vector{Float64}, length n
+    x0;                # initial permeability field
+    x_lb = 0.0,
+    x_ub = 5.0,
+    lambda_reg = 1e-2,
+    device = "gpu"     # or "cpu"
+)
+nlp = create_darcy_nlp(cfg)
+result = solve_nlp(nlp, max_iter=500, tol=1e-4)
+```
+
+### Darcy Inversion (Stage B: with budget + smoothness)
+```julia
+cfg_b = DarcyProblemConfig(
+    fno_path, y_tar, x0;
+    x_lb=0.0, x_ub=5.0, lambda_reg=1e-2,
+    budget = 50.0,          # 1ᵀx ≤ B
+    tau = 1e3,              # xᵀLx ≤ τ  (L = 2-D Laplacian, auto-built)
+    grid_nx = 64,
+    device = "cpu",
+)
+nlp = create_darcy_nlp(cfg_b)
+```
+
+### Pareto Sweep
+```julia
+results = pareto_front_sweep(
+    "output/models/pareto/f1_net_n20_seed42.pt",
+    "output/models/pareto/f2_net_n20_seed42.pt",
+    x0;
+    h_path = "output/models/pareto/h_net_n20_seed42.pt",
+    alpha_values = collect(range(0, 1; length=21)),
+    x_lb = -1.0,
+    x_ub = 1.0,
+    device = "cpu",
+    warm_start = true,
+)
+# results is a Vector of Dicts with :alpha, :f1_val, :f2_val, :h_val, :feasible, …
+hv = pareto_hypervolume(
+    [(r[:f1_val], r[:f2_val]) for r in results if r[:feasible]],
+    (2.0, 2.0)  # reference point
+)
+```
+
+### Generic single-network (original API, unchanged)
+```julia
+nlp = create_simple_nlp(
+    "output/models/mnist/small_mlp/model_seed42.pt",
+    target, x0;
+    bounds = (-1.0, 1.0),
+    use_python = true,
+    ad_backend = :zygote,
+)
+result = solve_nlp(nlp, max_iter=1000, tol=1e-4)
+```
+
+### ProblemSpec (generic multi-network constructor)
+```julia
+spec = ProblemSpec(
+    ["f1.pt", "f2.pt", "h.pt"],
+    WeightedScalarizationObjective(0.3),
+    x0;
+    constraints = CompositeConstraint(
+        BoxConstraints(fill(-1.0, n), fill(1.0, n)),
+        LearnedFeasibilityConstraint(; network_index=3)
+    ),
+    problem_type = "pareto",
+)
+nlp = NeuralNetworkNLPModel(spec; device="gpu")
+```
+
+## Constraint and Objective Types
+
+| Type | Formulation |
+|---|---|
+| `BoxConstraints(x_min, x_max)` | `x_min ≤ x ≤ x_max` (→ lvar/uvar) |
+| `SphericalConstraint(c, r)` | `‖x - c‖² ≤ r²` |
+| `BudgetConstraint(B)` | `1ᵀx ≤ B` |
+| `SmoothnessConstraint(L, τ)` | `xᵀLx ≤ τ` |
+| `LearnedFeasibilityConstraint(; network_index, threshold)` | `h_{θ}(x) ≤ threshold` |
+| `CompositeConstraint(c1, c2, …)` | stacked |
+| `NeuralNetworkObjective(target)` | `‖N(x) − target‖²` |
+| `QuadraticRegularization(c; weight)` | `weight ‖x − c‖²` |
+| `SurrogateInversionObjective(target, x0; weight, reg_weight)` | `w‖N(x)−target‖² + λ‖x−x₀‖²` |
+| `WeightedScalarizationObjective(α)` | `α f₁(x) + (1−α) f₂(x)` |
+| `CompositeObjective(o1, o2, …)` | sum |
+
+## Backend Selection
+
+| Problem size | Recommended backend | AD method |
+|---|---|---|
+| n < 100 | Julia/Flux | ForwardDiff |
+| 100 ≤ n < 500 | Julia/Flux | Zygote (default) |
+| n ≥ 500 | Python/JAX | JAX native (JIT, GPU) |
+| FNO / multi-network | Python/JAX | JAX native (required) |
 
 ## References
 
-- **MadNLP.jl**: [https://github.com/MadNLP/MadNLP.jl](https://github.com/MadNLP/MadNLP.jl)
-- **NLPModels.jl**: [https://github.com/JuliaSmoothOptimizers/NLPModels.jl](https://github.com/JuliaSmoothOptimizers/NLPModels.jl)
-- **PythonCall.jl**: [https://github.com/cjdoris/PythonCall.jl](https://github.com/cjdoris/PythonCall.jl)
-- **PyTorch**: [https://pytorch.org/](https://pytorch.org/)
-- **JAX**: [https://github.com/google/jax](https://github.com/google/jax)
-- **Optuna**: [https://optuna.org/](https://optuna.org/)
-- **Zygote.jl**: [https://fluxml.ai/Zygote.jl/](https://fluxml.ai/Zygote.jl/)
+- **MadNLP.jl**: Shin, Pacaud, Zavala — GPU-accelerated interior-point methods
+- **ExaModels.jl / condensed IPM**: Pacaud & Shin (arXiv:2403.15913, arXiv:2405.14236)
+- **FNO**: Li et al. (ICLR 2021)
+- **NLPModels.jl**: JuliaSmoothOptimizers
+- **JAX**: Bradbury et al.
+- **Zygote.jl / Flux.jl**: Innes
