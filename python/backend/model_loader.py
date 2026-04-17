@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Dict, Tuple
 
+import numpy as np
 import torch
 
 log = logging.getLogger(__name__)
@@ -46,14 +47,27 @@ class ModelLoader:
         """
         log.info("Loading checkpoint: %s", model_path)
 
-        checkpoint = torch.load(model_path, map_location="cpu")
-
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            state_dict = checkpoint["model_state_dict"]
-            config = checkpoint.get("model_config", {})
+        if model_path.endswith(".npz"):
+            with np.load(model_path, allow_pickle=False) as archive:
+                state_dict = {key: archive[key] for key in archive.files}
+            config = {
+                "model_type": "fno2d",
+                "grid_nx": int(state_dict.get("grid_nx", 64)),
+                "grid_ny": int(state_dict.get("grid_ny", state_dict.get("grid_nx", 64))),
+                "k_max_x": int(state_dict.get("k_max_x", 16)),
+                "k_max_y": int(state_dict.get("k_max_y", state_dict.get("k_max_x", 16))),
+                "n_layers": int(state_dict.get("n_layers", 4)),
+                "d_v": int(state_dict.get("d_v", 32)),
+            }
         else:
-            state_dict = checkpoint
-            config = _infer_config(state_dict)
+            checkpoint = torch.load(model_path, map_location="cpu")
+
+            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                state_dict = checkpoint["model_state_dict"]
+                config = checkpoint.get("model_config", {})
+            else:
+                state_dict = checkpoint
+                config = _infer_config(state_dict)
 
         model_type = config.get("model_type", "unknown").lower()
         log.info("  model_type=%s", model_type)
@@ -125,7 +139,7 @@ def _infer_config(state_dict: Dict) -> Dict:
 
     is_resmlp = any("blocks." in k for k in keys)
     is_mlp = any(
-        k.startswith(("network.", "layers.")) for k in keys
+        k.startswith(("network.", "layers.", "net.")) for k in keys
     )
 
     if is_resmlp:
@@ -139,7 +153,7 @@ def _infer_config(state_dict: Dict) -> Dict:
 
     layer_shapes = []
     for k in sorted(keys):
-        if "weight" in k and ("network." in k or "layers." in k):
+        if "weight" in k and ("network." in k or "layers." in k or "net." in k):
             parts = k.split(".")
             try:
                 idx = int(parts[1])

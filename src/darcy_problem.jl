@@ -129,7 +129,7 @@ directly to `solve_nlp`.
 # Example
 ```julia
 cfg = DarcyProblemConfig(
-    "output/models/darcy/fno_darcy_64x64.pt",
+    "output/darcy/models/fno_darcy_64x64_dv32_seed42.npz",
     target_pressure,
     x0;
     x_lb=0.1, x_ub=5.0,

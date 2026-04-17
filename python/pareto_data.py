@@ -211,13 +211,17 @@ def train_all_surrogates(
     """
     X, f1, f2, h = generate_pareto_data(n=n, n_samples=n_samples, seed=seed,
                                          output_dir=data_dir)
-    paths = {}
+    trained = {}
     for label, y in [("f1_net", f1), ("f2_net", f2), ("h_net", h)]:
-        paths[label] = train_surrogate(
+        trained[label] = train_surrogate(
             X, y, n_in=n, label=label, hidden=hidden,
             epochs=epochs, seed=seed, output_dir=output_dir, device=device,
         )
-    return paths
+    return {
+        "f1_path": trained["f1_net"],
+        "f2_path": trained["f2_net"],
+        "h_path": trained["h_net"],
+    }
 
 
 # ============================================================================

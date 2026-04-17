@@ -13,7 +13,7 @@ using Statistics
 # ------------------------------------------------------------------
 # Python interface (dataset creation, training)
 # ------------------------------------------------------------------
-export setup_python_env, create_dataset, train_model, load_trained_model
+export setup_python_env, train_darcy_fno, train_pareto_surrogates, load_trained_model
 
 # ------------------------------------------------------------------
 # Core NLP interface: activation, model loading
@@ -46,11 +46,15 @@ export hessian_contribution, has_closed_form_hessian
 # ------------------------------------------------------------------
 export ProblemSpec
 export laplacian_1d, laplacian_2d
+export DarcyProblemConfig, create_darcy_nlp, create_darcy_stage_a, create_darcy_stage_b, create_darcy_stage_c
+export ParetoProblemConfig, create_pareto_nlp, pareto_front_sweep
+export evaluate_pareto_objectives, pareto_hypervolume, pareto_spread
 
 # ------------------------------------------------------------------
 # NLP model and solver interface
 # ------------------------------------------------------------------
 export NeuralNetworkNLPModel
+export TimingStats
 export solve_nlp, create_simple_nlp
 export select_linear_solver
 

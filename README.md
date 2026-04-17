@@ -37,15 +37,12 @@ MadNLP4NN.jl/
 ├── Project.toml
 ├── README.md
 ├── startup.jl
-├── configs/
-│   ├── darcy_config.toml          # Darcy case study configuration
-│   └── pareto_config.toml         # Pareto tracing configuration
 ├── src/
 │   ├── MadNLP4NN.jl               # Main module
 │   ├── nlp_interface.jl           # Objectives, constraints, model loading
 │   ├── problem_spec.jl            # ProblemSpec + new types + Laplacian helpers
 │   ├── nlp_model.jl               # NeuralNetworkNLPModel, ProblemSpec constructor
-│   ├── python_interface.jl        # Julia → Python bridge (training)
+│   ├── python_interface.jl        # Julia → Python bridge (Darcy / Pareto training)
 │   ├── darcy_problem.jl           # DarcyProblemConfig + staged constructors
 │   └── pareto_problem.jl          # ParetoProblemConfig + sweep + quality metrics
 ├── python/
@@ -62,17 +59,12 @@ MadNLP4NN.jl/
 │   │   └── darcy.py               # FNO inversion evaluator
 │   └── models/
 │       ├── mlp.py                 # MLP / ResMLP builders
-│       ├── resnet.py              # CIFAR-style ResNet builder
+│       ├── resnet.py              # Generic ResNet builder
 │       └── fno.py                 # FNO2D builder (new)
 ├── examples/
-│   ├── run_opt.jl                 # Configurable single-run (original)
-│   ├── run_opt_ablation.jl        # Classification ablation study (original)
 │   ├── run_darcy_inversion.jl     # Case Study I: staged Darcy experiments
 │   ├── run_pareto_tracing.jl      # Case Study II: Pareto sweep
 │   ├── run_benchmarks.jl          # Unified CPU/GPU benchmark harness
-│   ├── create_dataset_all.jl
-│   ├── train_all.jl
-│   └── train_all_parallel.jl
 └── test/
     └── runtests.jl                # Regression + correctness tests
 ```
@@ -102,7 +94,7 @@ pip install optax
 ```julia
 # In startup.jl or before using MadNLP4NN:
 ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
-ENV["JULIA_PYTHONCALL_EXE"] = "/path/to/your/python"
+ENV["JULIA_PYTHONCALL_EXE"] = "/opt/anaconda3/envs/madnlp4nn/bin/python"
 ```
 
 ### Step 4 (optional): GPU solver
@@ -114,7 +106,7 @@ using Pkg; Pkg.add("MadNLPGPU")
 
 ### Run tests
 ```julia
-using Pkg; Pkg.test()
+julia --project=. test/runtests.jl
 ```
 
 ### Case Study I: Darcy FNO Inversion
@@ -200,18 +192,6 @@ hv = pareto_hypervolume(
 )
 ```
 
-### Generic single-network (original API, unchanged)
-```julia
-nlp = create_simple_nlp(
-    "output/models/mnist/small_mlp/model_seed42.pt",
-    target, x0;
-    bounds = (-1.0, 1.0),
-    use_python = true,
-    ad_backend = :zygote,
-)
-result = solve_nlp(nlp, max_iter=1000, tol=1e-4)
-```
-
 ### ProblemSpec (generic multi-network constructor)
 ```julia
 spec = ProblemSpec(
@@ -260,3 +240,13 @@ nlp = NeuralNetworkNLPModel(spec; device="gpu")
 - **NLPModels.jl**: JuliaSmoothOptimizers
 - **JAX**: Bradbury et al.
 - **Zygote.jl / Flux.jl**: Innes
+
+## Notes
+
+- The repository is now proposal-focused. Historical classification-era
+  ablation scripts, training pipelines, and associated documentation/assets
+  have been removed.
+- Proposal-era FNO checkpoints are stored as `.npz` files under
+  `output/darcy/models/`.
+- Pareto surrogate checkpoints are stored as `.pt` files under
+  `output/models/pareto/`.

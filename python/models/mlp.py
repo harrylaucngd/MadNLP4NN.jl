@@ -46,7 +46,14 @@ def build_mlp_jax(
         JAX parameter dict.
     """
     keys = list(state_dict.keys())
-    prefix = "network" if any(k.startswith("network.") for k in keys) else "layers"
+    if any(k.startswith("network.") for k in keys):
+        prefix = "network"
+    elif any(k.startswith("layers.") for k in keys):
+        prefix = "layers"
+    elif any(k.startswith("net.") for k in keys):
+        prefix = "net"
+    else:
+        prefix = "layers"
 
     layer_indices = sorted(set(
         int(k.split(".")[1])
@@ -100,12 +107,13 @@ def build_resmlp_jax(
     else:
         raise KeyError("Cannot find initial projection weights in state_dict")
 
+    blocks = []
     params = {
         "init_proj": {
             "W": jnp.array(ip_w.detach().cpu().numpy(), dtype=jnp.float64),
             "b": jnp.array(ip_b.detach().cpu().numpy(), dtype=jnp.float64),
         },
-        "blocks": [],
+        "blocks": blocks,
         "output": {
             "W": jnp.array(state_dict["output_layer.weight"].detach().cpu().numpy(), dtype=jnp.float64),
             "b": jnp.array(state_dict["output_layer.bias"].detach().cpu().numpy(), dtype=jnp.float64),
@@ -124,7 +132,7 @@ def build_resmlp_jax(
                 "b": jnp.array(state_dict[f"blocks.{i}.fc2.bias"].detach().cpu().numpy(), dtype=jnp.float64),
             },
         }
-        params["blocks"].append(bp)
+        blocks.append(bp)
 
     def forward(params_dict, x):
         out = jnp.dot(params_dict["init_proj"]["W"], x) + params_dict["init_proj"]["b"]

@@ -240,11 +240,11 @@ end
 
 
 """
-    _evaluate_pareto_objectives(nlp, x_sol, has_h)
+    evaluate_pareto_objectives(nlp, x_sol, has_h)
 
-Call the Python evaluator to get raw [f1, f2] (and optionally h) at x_sol.
+Call the Python evaluator to get raw `[f1, f2]` (and optionally `h`) at `x_sol`.
 """
-function _evaluate_pareto_objectives(nlp::NeuralNetworkNLPModel, x_sol::Vector{Float64}, has_h::Bool)
+function evaluate_pareto_objectives(nlp::NeuralNetworkNLPModel, x_sol::Vector{Float64}, has_h::Bool)
     if nlp.python_evaluator === nothing
         return nothing, nothing, nothing
     end
@@ -264,6 +264,8 @@ function _evaluate_pareto_objectives(nlp::NeuralNetworkNLPModel, x_sol::Vector{F
         return nothing, nothing, nothing
     end
 end
+
+_evaluate_pareto_objectives = evaluate_pareto_objectives
 
 
 # ============================================================================

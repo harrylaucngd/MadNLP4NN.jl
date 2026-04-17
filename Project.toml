@@ -5,10 +5,8 @@ version = "0.2.0"
 
 [deps]
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
-FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
-Images = "916415d5-f1e6-5110-898d-aaa5f9f070e0"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MadNLP = "2621e9c9-9eb4-46b1-8089-e8c72242dfb6"
@@ -21,7 +19,6 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
 ArgParse = "1"
-FileIO = "1"
 Flux = "0.14"
 ForwardDiff = "0.10"
 JSON3 = "1.13"
@@ -30,9 +27,3 @@ NLPModels = "0.20"
 PythonCall = "0.9"
 Zygote = "0.6"
 julia = "1.9"
-
-[extras]
-Test = "8dfed614-e22c-358a-b18d-b3e0e34a1c67"
-
-[targets]
-test = ["Test"]

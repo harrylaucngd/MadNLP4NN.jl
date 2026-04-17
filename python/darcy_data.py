@@ -52,8 +52,8 @@ def sample_grf(
     -------
     a : (n, n) array  (log-permeability; use exp(a) for conductivity)
     """
-    kx = np.fft.rfftfreq(n, d=1.0 / n)
-    ky = np.fft.fftfreq(n, d=1.0 / n)
+    kx = np.fft.fftfreq(n, d=1.0 / n)
+    ky = np.fft.rfftfreq(n, d=1.0 / n)
     KX, KY = np.meshgrid(kx, ky, indexing="ij")  # rfft shape: (n, n//2+1)
 
     freq_sq = KX ** 2 + KY ** 2
@@ -216,7 +216,7 @@ def train_fno(
     epochs: int = 200,
     batch_size: int = 32,
     seed: int = 42,
-    output_dir: str = "output/models/darcy",
+    output_dir: str = "output/darcy/models",
     device: str = "cpu",
 ) -> str:
     """Train an FNO2D surrogate on Darcy flow data.
@@ -231,9 +231,11 @@ def train_fno(
     except ImportError:
         raise ImportError("optax is required for FNO training: pip install optax")
 
+    from backend.device import DeviceManager
     from models.fno import fno2d_forward, make_random_fno2d_params
 
     jax.config.update("jax_enable_x64", True)
+    dm = DeviceManager(device)
 
     # Load data
     import glob
@@ -251,18 +253,24 @@ def train_fno(
 
     # Initialise params
     key = jax.random.PRNGKey(seed)
-    params = make_random_fno2d_params(
+    full_params = dm.put(make_random_fno2d_params(
         key, n_in=1, n_out=1, d_v=d_v, n_layers=n_layers,
         k_max_x=k_max, k_max_y=k_max, grid_nx=grid_n, grid_ny=grid_n,
-    )
+    ))
+    meta_keys = {"grid_nx", "grid_ny", "k_max_x", "k_max_y"}
+    meta = {k: full_params[k] for k in meta_keys}
+    params = {k: v for (k, v) in full_params.items() if k not in meta_keys}
 
     # Optimizer
     schedule = optax.cosine_decay_schedule(lr, epochs * (n_samples // batch_size))
     optimizer = optax.adam(schedule)
     opt_state = optimizer.init(params)
 
-    def loss_fn(params, a_batch, u_batch):
-        preds = jax.vmap(lambda a: fno2d_forward(params, a))(a_batch)
+    def forward_with_meta(trainable_params, a):
+        return fno2d_forward({**trainable_params, **meta}, a)
+
+    def loss_fn(trainable_params, a_batch, u_batch):
+        preds = jax.vmap(lambda a: forward_with_meta(trainable_params, a))(a_batch)
         return jnp.mean((preds - u_batch) ** 2)
 
     @jax.jit
@@ -281,8 +289,8 @@ def train_fno(
 
         for start in range(0, n_samples, batch_size):
             batch_idx = idx[start:start + batch_size]
-            a_b = a_all[batch_idx].reshape(len(batch_idx), -1)  # (B, N*N)
-            u_b = u_all[batch_idx].reshape(len(batch_idx), -1)  # (B, N*N)
+            a_b = dm.array(a_all[batch_idx].reshape(len(batch_idx), -1))  # (B, N*N)
+            u_b = dm.array(u_all[batch_idx].reshape(len(batch_idx), -1))  # (B, N*N)
             params, opt_state, loss = step(params, opt_state, a_b, u_b)
             epoch_loss += float(loss)
             n_batches += 1
@@ -295,7 +303,8 @@ def train_fno(
     ckpt_path = os.path.join(
         output_dir, f"fno_darcy_{grid_n}x{grid_n}_dv{d_v}_seed{seed}.npz"
     )
-    _save_fno_params(params, ckpt_path, grid_n, k_max, n_layers, d_v)
+    trained_params = {**params, **meta}
+    _save_fno_params(trained_params, ckpt_path, grid_n, k_max, n_layers, d_v)
     log.info("Saved FNO checkpoint: %s", ckpt_path)
 
     return ckpt_path

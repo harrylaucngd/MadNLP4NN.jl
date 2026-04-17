@@ -207,7 +207,7 @@ neural networks. Passed to specialized constructors for each case study.
 - `x_lb`: lower variable bounds (default -∞)
 - `x_ub`: upper variable bounds (default +∞)
 - `problem_type`: string tag identifying case study (e.g., "darcy", "pareto",
-                  "classification")
+                  or "generic")
 
 # Constructor
     ProblemSpec(network_paths, objective, x0; constraints, x_lb, x_ub, problem_type)

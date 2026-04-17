@@ -1,427 +1,162 @@
 """
-Julia interface to Python training scripts.
-Uses PythonCall.jl to execute Python code.
+Julia interface to the proposal-aligned Python tooling.
+
+The repository now focuses on two workflows only:
+- Darcy/FNO data generation + surrogate training
+- Pareto surrogate data generation + training
 """
 
 using PythonCall
-using JSON3
 
-# Python environment setup
 const PYTHON_DIR = joinpath(@__DIR__, "..", "python")
+
+function _ensure_python_path!()
+    abs_python_dir = abspath(PYTHON_DIR)
+    sys = pyimport("sys")
+    path_strings = [string(p) for p in sys.path]
+    if !(abs_python_dir in path_strings)
+        sys.path.insert(0, abs_python_dir)
+        @info "Added Python directory to sys.path: $abs_python_dir"
+    end
+    return abs_python_dir
+end
+
+function _python_executable()
+    return get(ENV, "JULIA_PYTHONCALL_EXE", "python")
+end
 
 """
     setup_python_env(; force_reinstall=false)
 
-Set up Python environment for MadNLP4NN.
-This creates a conda environment and installs required packages.
-
-# Arguments
-- `force_reinstall::Bool`: Whether to force reinstallation of packages
-
-# Example
-```julia
-using MadNLP4NN
-setup_python_env()
-```
+Configure PythonCall to see the repository's Python package directory.
+If `force_reinstall=true`, reinstall `python/requirements.txt` into the
+currently selected Python executable.
 """
-function setup_python_env(; force_reinstall=false)
+function setup_python_env(; force_reinstall::Bool=false)
     @info "Setting up Python environment for MadNLP4NN..."
-    
-    # Add Python directory to path (use absolute path)
-    abs_python_dir = abspath(PYTHON_DIR)
-    sys = pyimport("sys")
-    path_strings = [string(p) for p in sys.path]
-    
-    if !(abs_python_dir in path_strings)
-        sys.path.insert(0, abs_python_dir)
-        @info "Added Python directory to sys.path: $abs_python_dir"
-    else
-        @info "Python directory already in sys.path: $abs_python_dir"
-    end
-    
-    # Check if required packages are installed
+    _ensure_python_path!()
     requirements_file = joinpath(PYTHON_DIR, "requirements.txt")
-    
+
     if force_reinstall
-        @info "Force reinstalling Python packages..."
-        run(`pip install -r $requirements_file`)
+        python_exe = _python_executable()
+        @info "Reinstalling Python packages with $python_exe"
+        run(`$python_exe -m pip install -r $requirements_file`)
     else
-        @info "Python path configured. Make sure you have installed requirements:"
-        @info "  pip install -r $requirements_file"
+        @info "Python path configured. Requirements file:"
+        @info "  $requirements_file"
     end
-    
-    @info "Python environment setup complete!"
+
     return nothing
 end
 
-
 """
-    create_dataset(;
-        dataset_type::String,
-        output_dir::String="./output",
-        n_samples::Int=10000,
-        input_dim::Int=784,
-        output_dim::Int=10,
-        kwargs...
+    train_darcy_fno(; kwargs...)
+
+Generate Darcy data (train/test) and train an FNO surrogate via
+`python/darcy_data.py`.
+
+Returns the checkpoint path of the trained `.npz` FNO model.
+"""
+function train_darcy_fno(;
+    data_dir::String="./output/darcy",
+    grid_n::Int=64,
+    n_samples::Int=1000,
+    seed::Int=42,
+    epochs::Int=200,
+    d_v::Int=32,
+    n_layers::Int=4,
+    k_max::Int=min(16, grid_n ÷ 4),
+    lr::Float64=1e-3,
+    batch_size::Int=32,
+    device::String="cpu",
+)
+    setup_python_env()
+    darcy_module = pyimport("darcy_data")
+
+    darcy_module.generate_darcy_dataset(
+        n_samples=n_samples,
+        grid_n=grid_n,
+        seed=seed,
+        output_dir=data_dir,
+        split="train",
+    )
+    darcy_module.generate_darcy_dataset(
+        n_samples=max(1, n_samples ÷ 5),
+        grid_n=grid_n,
+        seed=seed + 1,
+        output_dir=data_dir,
+        split="test",
     )
 
-Create and save a dataset using Python backend.
-
-# Arguments
-- `dataset_type::String`: Type of dataset ("gaussian_mixture", "nonlinear_manifold", "mnist", "fashionmnist", "cifar10")
-- `output_dir::String`: Directory to save dataset
-- `n_samples::Int`: Number of samples (for synthetic datasets)
-- `input_dim::Int`: Input dimension
-- `output_dim::Int`: Output dimension
-- `kwargs...`: Additional dataset-specific arguments
-
-# Returns
-- Dictionary with dataset metadata
-
-# Example
-```julia
-metadata = create_dataset(
-    dataset_type="gaussian_mixture",
-    n_samples=10000,
-    input_dim=784,
-    output_dim=10,
-    n_components=20
-)
-```
-"""
-function create_dataset(;
-    dataset_type::String,
-    output_dir::String="./output",
-    n_samples::Int=10000,
-    input_dim::Int=784,
-    output_dim::Int=10,
-    kwargs...
-)
-    @info "Creating dataset: $dataset_type"
-    
-    # Import Python modules
-    # Ensure Python directory is in path (use absolute path)
-    abs_python_dir = abspath(PYTHON_DIR)
-    sys = pyimport("sys")
-    path_strings = [string(p) for p in sys.path]
-    
-    if !(abs_python_dir in path_strings)
-        sys.path.insert(0, abs_python_dir)
-        @debug "Added Python directory to sys.path: $abs_python_dir"
-    end
-    
-    dataset_module = pyimport("dataset_constructor")
-    
-    # Create dataset based on type
-    if dataset_type == "gaussian_mixture"
-        n_components = get(kwargs, :n_components, 20)
-        seed = get(kwargs, :seed, 42)
-        
-        # Generate dataset name
-        dataset_name = "GM_n$(n_samples)_d$(input_dim)_c$(output_dim)_comp$(n_components)_s$(seed)"
-        
-        dataset = dataset_module.GaussianMixtureDataset(
-            n_samples=n_samples,
-            input_dim=input_dim,
-            output_dim=output_dim,
-            n_components=n_components,
-            seed=seed
-        )
-        
-        # Save to output/datasets/gaussian_mixture/GM_...
-        save_dir = joinpath(output_dir, "datasets", "gaussian_mixture")
-        dataset.save(save_dir, dataset_name)
-        
-        @info "Dataset saved to: $(joinpath(save_dir, dataset_name))"
-        
-        # Load and return metadata
-        metadata_file = joinpath(save_dir, dataset_name, "metadata.json")
-        metadata = JSON3.read(read(metadata_file, String))
-        
-        return metadata
-        
-    elseif dataset_type == "nonlinear_manifold"
-        manifold_dim = get(kwargs, :manifold_dim, 50)
-        nonlinearity = get(kwargs, :nonlinearity, "polynomial")
-        seed = get(kwargs, :seed, 42)
-        
-        # Generate dataset name
-        dataset_name = "NM_n$(n_samples)_a$(input_dim)_m$(manifold_dim)_c$(output_dim)_$(nonlinearity)_s$(seed)"
-        
-        dataset = dataset_module.NonlinearManifoldDataset(
-            n_samples=n_samples,
-            ambient_dim=input_dim,
-            manifold_dim=manifold_dim,
-            output_dim=output_dim,
-            nonlinearity=nonlinearity,
-            seed=seed
-        )
-        
-        # Save to output/datasets/nonlinear_manifold/NM_...
-        save_dir = joinpath(output_dir, "datasets", "nonlinear_manifold")
-        dataset.save(save_dir, dataset_name)
-        
-        @info "Dataset saved to: $(joinpath(save_dir, dataset_name))"
-        
-        # Load and return metadata
-        metadata_file = joinpath(save_dir, dataset_name, "metadata.json")
-        metadata = JSON3.read(read(metadata_file, String))
-        
-        return metadata
-        
-    elseif dataset_type in ["mnist", "fashionmnist", "cifar10"]
-        flatten = get(kwargs, :flatten, true)
-        
-        train_ds, test_ds, metadata = dataset_module.load_real_dataset(
-            dataset_name=dataset_type,
-            data_dir=joinpath(output_dir, "datasets", dataset_type),
-            flatten=flatten
-        )
-        
-        return pyconvert(Dict, metadata)
-        
-    else
-        error("Unknown dataset type: $dataset_type")
-    end
+    return pyconvert(String, darcy_module.train_fno(
+        data_dir=data_dir,
+        grid_n=grid_n,
+        d_v=d_v,
+        n_layers=n_layers,
+        k_max=k_max,
+        lr=lr,
+        epochs=epochs,
+        batch_size=batch_size,
+        seed=seed,
+        output_dir=joinpath(data_dir, "models"),
+        device=device,
+    ))
 end
 
-
 """
-    train_model(;
-        dataset_type::String,
-        model_config::String,
-        output_dir::String="./output",
-        run_hparam_search::Bool=false,
-        kwargs...
-    )
+    train_pareto_surrogates(; kwargs...)
 
-Train a neural network model using Python backend.
+Generate Pareto training data and train the `f1`, `f2`, and `h` surrogate
+networks via `python/pareto_data.py`.
 
-# Arguments
-- `dataset_type::String`: Type of dataset
-- `model_config::String`: Model configuration ("small_mlp", "medium_mlp", "large_mlp", "small_resmlp", "medium_resmlp", "large_resmlp")
-- `output_dir::String`: Output directory
-- `run_hparam_search::Bool`: Whether to run hyperparameter search
-- `kwargs...`: Additional training arguments
-
-# Returns
-- Dictionary with training results
-
-# Example
-```julia
-results = train_model(
-    dataset_type="gaussian_mixture",
-    model_config="medium_mlp",
-    epochs=100,
-    run_hparam_search=true
-)
-```
+Returns a Dict with keys `\"f1_path\"`, `\"f2_path\"`, and `\"h_path\"`.
 """
-function train_model(;
-    dataset_type::String,
-    model_config::String,
-    output_dir::String="./output",
-    run_hparam_search::Bool=false,
-    kwargs...
+function train_pareto_surrogates(;
+    n::Int=20,
+    n_samples::Int=5000,
+    seed::Int=42,
+    data_dir::String="./output/pareto",
+    output_dir::String="./output/models/pareto",
+    epochs::Int=200,
+    hidden::Int=64,
+    device::String="cpu",
 )
-    @info "Training model: $model_config on $dataset_type"
-    
-    # Build command line arguments
-    cmd_args = [
-        "--dataset_type", dataset_type,
-        "--model_config", model_config,
-        "--output_dir", output_dir,
-    ]
-    
-    if run_hparam_search
-        push!(cmd_args, "--run_hparam_search")
-    end
-    
-    # Add optional arguments
-    for (key, value) in kwargs
-        key_str = "--" * string(key)
-        push!(cmd_args, key_str)
-        push!(cmd_args, string(value))
-    end
-    
-    # Run Python script
-    main_script = joinpath(PYTHON_DIR, "main.py")
-    
-    @info "Running training with arguments: $(join(cmd_args, " "))"
-    
-    try
-        run(`python $main_script $cmd_args`)
-    catch e
-        @error "Training failed: $e"
-        rethrow(e)
-    end
-    
-    # Load and return results
-    # Note: The model path structure has changed to {output_dir}/models/{dataset_name}/{model_config}/
-    # We need to construct the dataset_name from the arguments
-    seed = get(kwargs, :seed, 42)
-    
-    # Construct dataset name based on type
-    if dataset_type == "gaussian_mixture"
-        n_samples = get(kwargs, :n_samples, 10000)
-        input_dim = get(kwargs, :input_dim, 784)
-        output_dim = get(kwargs, :output_dim, 10)
-        n_components = get(kwargs, :n_components, 20)
-        dataset_name = "GM_n$(n_samples)_d$(input_dim)_c$(output_dim)_comp$(n_components)_s$(seed)"
-    elseif dataset_type == "nonlinear_manifold"
-        n_samples = get(kwargs, :n_samples, 10000)
-        input_dim = get(kwargs, :input_dim, 784)
-        manifold_dim = get(kwargs, :manifold_dim, 50)
-        output_dim = get(kwargs, :output_dim, 10)
-        nonlinearity = get(kwargs, :nonlinearity, "polynomial")
-        dataset_name = "NM_n$(n_samples)_a$(input_dim)_m$(manifold_dim)_c$(output_dim)_$(nonlinearity)_s$(seed)"
-    else
-        dataset_name = dataset_type
-    end
-    
-    model_save_dir = joinpath(output_dir, "models", dataset_name, model_config)
-    results_file = joinpath(model_save_dir, "results_seed$(seed).json")
-    
-    if isfile(results_file)
-        results = JSON3.read(read(results_file, String))
-        @info "Training complete! Best validation accuracy: $(results[:best_val_acc])"
-        return results
-    else
-        @warn "Results file not found: $results_file"
-        return nothing
-    end
+    setup_python_env()
+    pareto_module = pyimport("pareto_data")
+    return pyconvert(Dict, pareto_module.train_all_surrogates(
+        n=n,
+        n_samples=n_samples,
+        seed=seed,
+        data_dir=data_dir,
+        output_dir=output_dir,
+        epochs=epochs,
+        hidden=hidden,
+        device=device,
+    ))
 end
-
-
-"""
-    train_all_combinations(;
-        dataset_types::Vector{String},
-        model_configs::Vector{String},
-        output_dir::String="./output",
-        run_hparam_search::Bool=false,
-        kwargs...
-    )
-
-Train models for all combinations of datasets and model configurations.
-This is useful for generating a comprehensive set of trained models.
-
-# Arguments
-- `dataset_types::Vector{String}`: List of dataset types
-- `model_configs::Vector{String}`: List of model configurations
-- `output_dir::String`: Output directory
-- `run_hparam_search::Bool`: Whether to run hyperparameter search
-- `kwargs...`: Additional training arguments
-
-# Returns
-- Vector of dictionaries with training results
-
-# Example
-```julia
-results = train_all_combinations(
-    dataset_types=["gaussian_mixture", "mnist"],
-    model_configs=["medium_mlp", "medium_resmlp"],
-    epochs=100
-)
-```
-"""
-function train_all_combinations(;
-    dataset_types::Vector{String},
-    model_configs::Vector{String},
-    output_dir::String="./output",
-    run_hparam_search::Bool=false,
-    kwargs...
-)
-    @info "Training $(length(dataset_types)) datasets × $(length(model_configs)) models = $(length(dataset_types) * length(model_configs)) combinations"
-    
-    all_results = []
-    
-    for dataset_type in dataset_types
-        # Create dataset first
-        @info "Creating dataset: $dataset_type"
-        
-        if dataset_type in ["mnist", "fashionmnist", "cifar10"]
-            create_dataset(dataset_type=dataset_type, output_dir=output_dir)
-        else
-            # For synthetic datasets, create with specified parameters
-            create_dataset(
-                dataset_type=dataset_type,
-                output_dir=output_dir;
-                kwargs...
-            )
-        end
-        
-        for model_config in model_configs
-            @info "Training combination: $dataset_type + $model_config"
-            
-            try
-                results = train_model(
-                    dataset_type=dataset_type,
-                    model_config=model_config,
-                    output_dir=output_dir,
-                    run_hparam_search=run_hparam_search;
-                    kwargs...
-                )
-                
-                push!(all_results, (
-                    dataset=dataset_type,
-                    model=model_config,
-                    results=results
-                ))
-            catch e
-                @error "Failed to train $dataset_type + $model_config: $e"
-            end
-        end
-    end
-    
-    @info "Training complete! Trained $(length(all_results)) models successfully."
-    return all_results
-end
-
 
 """
     load_trained_model(model_path::String)
 
-Load a trained model from disk.
+Load a PyTorch `.pt` checkpoint and return:
+`(model_state_dict, model_config, train_args, history)`.
 
-# Arguments
-- `model_path::String`: Path to the saved model
-
-# Returns
-- Tuple of (model_state_dict, model_config, train_args, history)
-
-# Example
-```julia
-state_dict, config, args, history = load_trained_model("./output/models/gaussian_mixture_medium_mlp/model_seed42.pt")
-```
+This helper is only for Torch checkpoints. Proposal-era FNO checkpoints use
+`.npz` and are loaded through the JAX model loader instead.
 """
 function load_trained_model(model_path::String)
+    endswith(lowercase(model_path), ".npz") &&
+        error("load_trained_model only supports PyTorch .pt checkpoints, not .npz FNO checkpoints.")
+
     @info "Loading model from: $model_path"
-    
-    # Import Python modules
-    # Ensure Python directory is in path (use absolute path)
-    abs_python_dir = abspath(PYTHON_DIR)
-    sys = pyimport("sys")
-    path_strings = [string(p) for p in sys.path]
-    
-    if !(abs_python_dir in path_strings)
-        sys.path.insert(0, abs_python_dir)
-        @debug "Added Python directory to sys.path: $abs_python_dir"
-    end
-    
+    _ensure_python_path!()
     torch = pyimport("torch")
-    
-    # Load checkpoint
-    checkpoint = torch.load(model_path)
-    
+    checkpoint = torch.load(model_path, map_location="cpu")
+
     model_state = pyconvert(Dict, checkpoint["model_state_dict"])
     model_config = pyconvert(Dict, checkpoint["model_config"])
-    train_args = pyconvert(Dict, checkpoint["train_args"])
-    history = pyconvert(Dict, checkpoint["history"])
-    
-    @info "Model loaded successfully"
-    @info "  Model type: $(model_config["model_type"])"
-    @info "  Input dim: $(model_config["input_dim"])"
-    @info "  Output dim: $(model_config["output_dim"])"
-    
+    train_args = pyconvert(Dict, get(checkpoint, "train_args", Dict()))
+    history = pyconvert(Dict, get(checkpoint, "history", Dict()))
+
     return model_state, model_config, train_args, history
 end

@@ -869,8 +869,9 @@ function solve_nlp(
     # Merge additional options
     merge!(options, Dict(kwargs))
     
-    # Create and solve
-    solver = MadNLPSolver(nlp; options...)
+    # Create and solve. Convert Dict -> NamedTuple so keyword forwarding is explicit.
+    solver_kwargs = (; pairs(options)...)
+    solver = MadNLPSolver(nlp; solver_kwargs...)
     result = MadNLP.solve!(solver)
     
     # Extract solution information
@@ -1110,7 +1111,7 @@ function _build_python_evaluator(mod, spec::ProblemSpec, device::String, remaini
     elseif ptype == "pareto"
         return _build_pareto_evaluator(mod, spec, device, remaining_constraint)
     else
-        # Generic / classification path
+        # Generic single-network path
         return _build_generic_evaluator(mod, spec, device, remaining_constraint)
     end
 end

@@ -47,7 +47,7 @@ println()
 # Argument parsing
 # ============================================================================
 
-function parse_args()
+function parse_cli_args()
     s = ArgParseSettings()
     @add_arg_table! s begin
         "--stage";    default = "B"
@@ -67,10 +67,10 @@ function parse_args()
         "--x_lb";     arg_type = Float64; default = -1.0
         "--x_ub";     arg_type = Float64; default = 1.0
     end
-    return parse_args(ARGS, s)
+    return ArgParse.parse_args(ARGS, s)
 end
 
-args = parse_args()
+args = parse_cli_args()
 
 const STAGE      = args["stage"]
 const N_DIM      = args["n_dim"]
@@ -164,7 +164,7 @@ function solve_single(alpha::Float64, x0::Vector{Float64})
     elapsed = time() - t0
 
     x_sol = result[:solution]
-    f_vals = _evaluate_pareto_objectives(nlp, x_sol, h_path !== nothing)
+    f_vals = evaluate_pareto_objectives(nlp, x_sol, h_path !== nothing)
     f1_val, f2_val, h_val = f_vals
 
     return Dict(

@@ -57,7 +57,7 @@ println()
 # Argument parsing
 # ============================================================================
 
-function parse_args()
+function parse_cli_args()
     s = ArgParseSettings()
     @add_arg_table! s begin
         "--stage"
@@ -101,10 +101,10 @@ function parse_args()
             action = :store_true
             help = "Run both JAX and Julia/Flux and compare"
     end
-    return parse_args(ARGS, s)
+    return ArgParse.parse_args(ARGS, s)
 end
 
-args = parse_args()
+args = parse_cli_args()
 
 const STAGE        = args["stage"]
 const GRID_N       = args["grid"]

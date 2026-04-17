@@ -5,7 +5,7 @@ Backward-compatible facade for the refactored JAX evaluator stack.
 
 Public API (unchanged for compatibility with Julia NeuralNetworkNLPModel):
     create_evaluator(model_path, target, x0, **kwargs)
-        → StandardEvaluator (single network, classification / target matching)
+        → StandardEvaluator (single network, generic target matching)
 
 New factory functions for proposal case studies:
     create_darcy_evaluator(fno_path, target_pressure, x0, **kwargs)

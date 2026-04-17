@@ -64,7 +64,7 @@ function parse_args_bench()
         "--output_dir"; default = "output/benchmark_results"
         "--seed";    arg_type = Int; default = 42
     end
-    return parse_args(ARGS, s)
+    return ArgParse.parse_args(ARGS, s)
 end
 
 args = parse_args_bench()
@@ -300,7 +300,7 @@ function benchmark_pareto(devices, quick)
                 elapsed = time() - t0
 
                 push!(times, elapsed)
-                f_vals = _evaluate_pareto_objectives(nlp, result[:solution], true)
+                f_vals = evaluate_pareto_objectives(nlp, result[:solution], true)
                 f1v, f2v, hv = f_vals
                 feasible = hv === nothing || hv <= 0.0
                 feasible && push!(front_pts, (f1v, f2v))

@@ -2,7 +2,12 @@
 # This ensures the correct Python environment is used
 
 # Set environment variables BEFORE loading any packages
-ENV["JULIA_PYTHONCALL_EXE"] = "/opt/anaconda3/envs/madnlp4nn/bin/python3.10"
+# Prefer an explicitly provided Python, otherwise use the local `madnlp4nn` conda env.
+ENV["JULIA_PYTHONCALL_EXE"] = get(
+    ENV,
+    "JULIA_PYTHONCALL_EXE",
+    "/opt/anaconda3/envs/madnlp4nn/bin/python",
+)
 ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
 
 # Activate the project
