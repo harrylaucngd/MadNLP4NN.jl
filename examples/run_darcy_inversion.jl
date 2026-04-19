@@ -224,7 +224,8 @@ println()
 
 function run_darcy_solve(
     nlp, label::String;
-    max_iter=MAX_ITER, tol=TOLERANCE, device=DEVICE
+    max_iter=MAX_ITER, tol=TOLERANCE, device=DEVICE,
+    x_true_ref=x_true, y_tar_ref=y_tar
 )
     println("  Solving: $(label)")
     solver_opts = Dict{Symbol,Any}(
@@ -246,7 +247,7 @@ function run_darcy_solve(
     x_sol = result[:solution]
     ts = result[:timing_stats]
 
-    rel_err = norm(x_sol .- x_true) / norm(x_true)
+    rel_err = norm(x_sol .- x_true_ref) / norm(x_true_ref)
     println("    Status:      $(result[:status])")
     println("    Objective:   $(@sprintf("%.6e", result[:objective]))")
     println("    Iterations:  $(result[:iter_count])")
@@ -265,8 +266,8 @@ function run_darcy_solve(
         :hess_time => ts.hess_time,
         :rel_recovery_error => rel_err,
         :solution => x_sol,
-        :x_true => x_true,
-        :y_tar => y_tar,
+        :x_true => x_true_ref,
+        :y_tar => y_tar_ref,
     )
 end
 
@@ -364,7 +365,14 @@ function run_stage_c()
             lambda_reg=LAMBDA_REG,
             device=DEVICE,
         )
-        res = run_darcy_solve(nlp, "Stage C, grid $(gn)×$(gn)"; max_iter=200, tol=1e-3)
+        res = run_darcy_solve(
+            nlp,
+            "Stage C, grid $(gn)×$(gn)";
+            max_iter=200,
+            tol=1e-3,
+            x_true_ref=x_t,
+            y_tar_ref=y_t,
+        )
         ts = nlp.timing_stats
         push!(scaling_results, Dict(
             :grid_n => gn,

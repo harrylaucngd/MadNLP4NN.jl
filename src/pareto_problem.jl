@@ -204,7 +204,9 @@ function pareto_front_sweep(
         )
         linear_solver !== nothing && (solver_opts[:linear_solver] = linear_solver)
 
+        t0 = time()
         result = solve_nlp(nlp; solver_opts...)
+        solve_time = time() - t0
 
         x_sol = result[:solution]
 
@@ -222,6 +224,7 @@ function pareto_front_sweep(
             :f2_val => f2_val,
             :h_val => h_val,
             :feasible => feasible,
+            :solve_time => solve_time,
             :timing_stats => result[:timing_stats],
             :iter_count => result[:iter_count],
         ))
