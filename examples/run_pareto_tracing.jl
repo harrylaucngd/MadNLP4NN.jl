@@ -32,9 +32,7 @@ const GPU_AVAILABLE = try
     @eval using MadNLPGPU; true
 catch; false; end
 
-const MUMPS_AVAILABLE = try
-    @eval using MadNLPMumps; true
-catch; false; end
+const MUMPS_AVAILABLE = true  # MUMPS is built into MadNLP >= 0.10
 
 println("="^80)
 println("MadNLP4NN — Case Study II: Constrained Pareto Tracing")
@@ -144,7 +142,7 @@ function build_solver_opts(device)
     ls = select_linear_solver(device)
     ls !== nothing && (opts[:linear_solver] = ls)
     MUMPS_AVAILABLE && device == "cpu" &&
-        (opts[:linear_solver] = MadNLPMumps.MumpsSolver)
+        (opts[:linear_solver] = MadNLP.MumpsSolver)
     return opts
 end
 
@@ -160,7 +158,7 @@ function solve_single(alpha::Float64, x0::Vector{Float64})
     nlp = create_pareto_nlp(cfg)
     opts = build_solver_opts(DEVICE)
     t0 = time()
-    result = solve_nlp(nlp; opts...)
+    result = solve_nlp(nlp; kkt_device=DEVICE, opts...)
     elapsed = time() - t0
 
     x_sol = result[:solution]
@@ -232,7 +230,7 @@ function run_stage_b()
         tol = TOLERANCE,
         warm_start = true,
         linear_solver = (MUMPS_AVAILABLE && DEVICE == "cpu") ?
-            MadNLPMumps.MumpsSolver : nothing,
+            MadNLP.MumpsSolver : nothing,
     )
 
     # Summary table

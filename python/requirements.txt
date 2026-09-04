@@ -9,6 +9,7 @@ tensorboard>=2.13.0
 pandas>=2.0.0
 optuna>=3.3.0
 scipy>=1.10.0
+h5py>=3.11.0,<4
 
 # JAX for neural network evaluation and automatic differentiation
 # For CPU:  pip install "jax[cpu]"

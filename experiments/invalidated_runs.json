@@ -1,0 +1,14 @@
+{
+  "pdebench_darcy_three_quality_lbfgs.json": "Julia column-major flattening fitted the transposed target",
+  "pdebench_darcy_binary_w01_lbfgs.json": "Julia column-major flattening fitted the transposed target",
+  "pdebench_darcy_latent32_lbfgs.json": "Julia column-major flattening fitted the transposed target",
+  "pdebench_darcy_latent16_gpu.json": "Julia column-major flattening fitted the transposed target",
+  "pdebench_darcy_latent16_cpu.json": "Julia column-major flattening fitted the transposed target",
+  "pdebench_darcy_smoke_gpu.json": "Julia column-major flattening fitted the transposed target",
+  "pdebench_darcy_smoke_cpu.json": "Julia column-major flattening fitted the transposed target",
+  "pfr_nmpc_reuse_replay_smoke3.json": "unsafe MadNLP resolve path diverged after solver reuse",
+  "pfr_nmpc_reuse_replay_exact_dlpack.json": "persistent solver had an unhandled step-54 failure",
+  "pfr_nmpc_reuse_replay_exact_dlpack_v2.json": "persistent solver had an unhandled step-54 failure",
+  "resource_darcy_fd_replay32_exact_dlpack.json": "JAX default allocator preallocated roughly 75% of H100 memory; not an actual peak-demand measurement",
+  "resource_darcy_fd_replay32_gauss_newton_dlpack.json": "JAX default allocator preallocated roughly 75% of H100 memory; not an actual peak-demand measurement"
+}

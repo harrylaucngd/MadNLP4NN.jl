@@ -60,11 +60,13 @@ class ModelLoader:
                 "d_v": int(state_dict.get("d_v", 32)),
             }
         else:
-            checkpoint = torch.load(model_path, map_location="cpu")
+            checkpoint = torch.load(
+                model_path, map_location="cpu", weights_only=False
+            )
 
             if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
                 state_dict = checkpoint["model_state_dict"]
-                config = checkpoint.get("model_config", {})
+                config = checkpoint.get("model_config") or _infer_config(state_dict)
             else:
                 state_dict = checkpoint
                 config = _infer_config(state_dict)
@@ -101,10 +103,20 @@ class ModelLoader:
         elif model_type in ("fno", "fno2d"):
             from models.fno import build_fno2d_jax
             return build_fno2d_jax(state_dict, config)
+        elif model_type == "pdebench_fno2d":
+            from models.pdebench_fno import build_pdebench_fno2d_jax
+            return build_pdebench_fno2d_jax(state_dict, config)
+        elif model_type == "pfr_pinn":
+            from models.pfr_pinn import build_pfr_pinn_jax
+            return build_pfr_pinn_jax(state_dict, config)
+        elif model_type == "pfr_cnn":
+            from models.pfr_cnn import build_pfr_cnn_jax
+            return build_pfr_cnn_jax(state_dict, config)
         else:
             raise ValueError(
                 f"Unknown model type: {model_type!r}. "
-                f"Supported: mlp, resmlp, resnet, fno2d."
+                "Supported: mlp, resmlp, resnet, fno2d, "
+                "pdebench_fno2d, pfr_pinn, pfr_cnn."
             )
 
 
@@ -123,8 +135,73 @@ def _infer_config(state_dict: Dict) -> Dict:
     is_resnet = has_conv and any(
         k.startswith(("layer1.", "layer2.", "layer3.")) for k in keys
     )
+    is_pdebench_fno = (
+        "fc0.weight" in state_dict
+        and "conv0.weights1" in state_dict
+        and "conv0.weights2" in state_dict
+        and "w0.weight" in state_dict
+    )
+    is_pfr_pinn = (
+        "lb" in state_dict
+        and "ub" in state_dict
+        and "dnn.dense_layers.0.weight" in state_dict
+    )
+    is_pfr_cnn = (
+        "lb" in state_dict
+        and "ub" in state_dict
+        and "cnn.cnn_layers.0.weight" in state_dict
+        and "cnn.linear.weight" in state_dict
+    )
     is_fno = any("fourier_layers" in k or "spectral_conv" in k for k in keys)
 
+    if is_pfr_cnn:
+        layer_count = sum(
+            key.startswith("cnn.cnn_layers.") and key.endswith(".weight")
+            for key in keys
+        )
+        hidden_channels = int(state_dict["cnn.cnn_layers.0.weight"].shape[0])
+        kernel_height = int(state_dict["cnn.cnn_layers.0.weight"].shape[2])
+        final_length = int(
+            state_dict["cnn.linear.weight"].shape[1] // hidden_channels
+        )
+        n_fe = final_length + layer_count * (kernel_height - 1)
+        output_channels = int(state_dict["cnn.linear.bias"].numel() // n_fe)
+        input_channels = int(state_dict["cnn.cnn_layers.0.weight"].shape[1])
+        return {
+            "model_type": "pfr_cnn",
+            "n_fe": n_fe,
+            "input_channels": input_channels,
+            "output_channels": output_channels,
+            "control_channels": input_channels - output_channels,
+            "hidden_channels": hidden_channels,
+            "layer_count": layer_count,
+            "kernel_height": kernel_height,
+            "activation": "tanh",
+        }
+    if is_pfr_pinn:
+        layer_count = sum(
+            key.startswith("dnn.dense_layers.") and key.endswith(".weight")
+            for key in keys
+        )
+        return {
+            "model_type": "pfr_pinn",
+            "input_dim": int(state_dict["lb"].numel()),
+            "output_dim": int(
+                state_dict[f"dnn.dense_layers.{layer_count - 1}.bias"].numel()
+            ),
+            "layer_count": layer_count,
+            "activation": "tanh",
+        }
+    if is_pdebench_fno:
+        return {
+            "model_type": "pdebench_fno2d",
+            "modes1": int(state_dict["conv0.weights1"].shape[-2]),
+            "modes2": int(state_dict["conv0.weights1"].shape[-1]),
+            "width": int(state_dict["fc0.weight"].shape[0]),
+            "initial_step": int(state_dict["fc0.weight"].shape[1] - 2),
+            "output_channels": int(state_dict["fc2.weight"].shape[0]),
+            "padding": 2,
+        }
     if is_fno:
         return {"model_type": "fno2d"}
     if is_resnet:

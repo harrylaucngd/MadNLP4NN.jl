@@ -141,9 +141,10 @@ class DarcyInversionEvaluator(BaseEvaluator):
         self._hess_obj_jit = jax.jit(jax.hessian(_obj))
 
         if self.m > 0:
-            self._hess_lag_fn = lambda x, y, w: jax.hessian(
-                lambda x_: _lagrangian(x_, y, w)
-            )(x)
+            self._hess_lag_jit = jax.jit(
+                jax.hessian(_lagrangian, argnums=0)
+            )
+            self._hess_lag_fn = self._hess_lag_jit
         else:
             self._hess_lag_fn = None
 

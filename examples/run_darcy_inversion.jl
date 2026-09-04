@@ -39,12 +39,7 @@ catch
 end
 
 # ---- Optional MUMPS ----
-const MUMPS_AVAILABLE = try
-    @eval using MadNLPMumps
-    true
-catch
-    false
-end
+const MUMPS_AVAILABLE = true  # MUMPS is built into MadNLP >= 0.10
 
 println("="^80)
 println("MadNLP4NN — Case Study I: Darcy Flow FNO Inversion")
@@ -238,10 +233,10 @@ function run_darcy_solve(
     ls !== nothing && (solver_opts[:linear_solver] = ls)
 
     MUMPS_AVAILABLE && device == "cpu" &&
-        (solver_opts[:linear_solver] = MadNLPMumps.MumpsSolver)
+        (solver_opts[:linear_solver] = MadNLP.MumpsSolver)
 
     t0 = time()
-    result = solve_nlp(nlp; solver_opts...)
+    result = solve_nlp(nlp; kkt_device=device, solver_opts...)
     elapsed = time() - t0
 
     x_sol = result[:solution]

@@ -1,0 +1,24 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{What the regime map supports.}
+The measurements define conditions, not a portable cutoff.  Transfer removal
+matters only after structure and curvature determine what is moved and how many
+KKT systems are solved.  PFR cases 1 and 3, latent-32 Darcy, and the fixed-size
+FNO topology sweep occupy distinct regimes that parameter count or decision
+dimension alone cannot identify.
+
+A KKT certificate still belongs to the surrogate.  Independent replay links
+this study to optimization shift and motivates combining failure-aware
+curvature with uncertainty, model management, or periodic high-fidelity
+queries.  Faster linear algebra does not replace those safeguards.
+
+\paragraph{Threats to validity and negative results.}
+Primary timings use one H100/Xeon server; shared starts and KKT audits do not
+establish global optimality.  Replay Darcy is specified but not a community
+benchmark, while the public split lacks historical replay.  The sequence
+interface omits bound-multiplier starts, and untrained FNOs measure graph memory
+rather than surrogate quality.  Appendix~\ref{app:data-audit} records the
+unsupported paths, timeouts, and two invalidated errors---a transposed Darcy
+target and an artificial dense-PFR GPU advantage---that made layout, sparsity,
+and simulator audits decisive.

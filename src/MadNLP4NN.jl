@@ -9,6 +9,10 @@ using LinearAlgebra
 using ForwardDiff
 using SparseArrays
 using Statistics
+using CUDA
+using CUDSS
+using DLPack
+using MadNLPGPU
 
 # ------------------------------------------------------------------
 # Python interface (dataset creation, training)
@@ -54,6 +58,7 @@ export evaluate_pareto_objectives, pareto_hypervolume, pareto_spread
 # NLP model and solver interface
 # ------------------------------------------------------------------
 export NeuralNetworkNLPModel
+export DLPackGPUModel, verify_jax_dlpack
 export TimingStats
 export solve_nlp, create_simple_nlp
 export select_linear_solver
@@ -62,6 +67,8 @@ include("python_interface.jl")
 include("nlp_interface.jl")
 include("problem_spec.jl")
 include("nlp_model.jl")
+include("gpu_interop.jl")
+include("gpu_nlp_model.jl")
 include("darcy_problem.jl")
 include("pareto_problem.jl")
 

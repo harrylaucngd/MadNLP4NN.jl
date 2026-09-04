@@ -1,0 +1,92 @@
+\section{Experimental Protocol}
+\label{sec:protocol}
+
+\subsection{Benchmarks span different bottlenecks}
+
+Table~\ref{tab:benchmarks} summarizes the benchmark suite.  The controlled
+family is used only for mechanism isolation.  The three application families
+come from public problem definitions or reproduce the closest prior work.
+
+\begin{table}[t]
+\centering
+\caption{Benchmark regimes.  $p$ is the number of fixed network
+parameters; $n,m$ are NLP variables and general constraints.  $\operatorname{nnz}J$
+and $\operatorname{nnz}H$ use the declared coordinate structures.}
+\label{tab:benchmarks}
+\small
+\setlength{\tabcolsep}{3.1pt}
+\begin{tabular}{lrrrrr}
+\toprule
+Problem & $p$ & $n$ & $m$ & $\operatorname{nnz}J$ & $\operatorname{nnz}H$\\
+\midrule
+Controlled MLP & 0.04--1.20M & 64--784 & 1 & 64--784 & 2K--308K\\
+MNIST attack & 0.17--5.01M & 2,362 & 805 & 10,213 & 307,720\\
+Darcy/FNO & 1.19M & 256/1,024 & 0 & 0 & 32,896/524,800\\
+PFR case 1 & 3.6K & 430 & 400 & 5,200 & 3,049\\
+PFR case 2 & 7.5K & 860 & 800 & 20,000 & 11,738\\
+PFR case 3 & 0.34M & 7,780 & 7,500 & 1,905,000 & 963,840\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Tasks.}
+The planted tanh-MLP family isolates systems costs at a common KKT point.
+MNIST reproduces the public seed, smooth architecture, sample mapping, and
+$\ell_1$ target-class problem of \citet{parker2025gpu,lecun1998mnist} at three
+network sizes and five starts.  PFR preserves the horizons, bounds, objectives,
+initial states, and released MLP/CNN checkpoints
+of~\mbox{\citet{elorza2025nmpc}}; case~1 additionally runs a 100-step
+mechanistic closed loop.  Float64 JAX/PyTorch discrepancies are below $9.3\times10^{-16}$.
+
+Public Darcy uses the deterministic $64\times64$ NeuralOperator split
+\citep{li2021fno,kovachki2023neuraloperator}, twelve prospective instances,
+latent $16^2$/$32^2$ fields, and five starts.  Because its historical
+preprocessing cannot be replayed without fitting undocumented metadata, PDE
+residuals use a separate prespecified 5,000/1,000 split from
+\begin{equation}
+-\nabla\!\cdot\!\left(e^{a(s)}\nabla u(s)\right)=1,
+\qquad u|_{\partial\Omega}=0,
+\label{eq:darcy}
+\end{equation}
+and a specified sparse finite-difference solver.  Its FNO has 1.32\% mean test
+error and stored truth replays to $3\times10^{-8}$ relative error.  Three pilot
+and twelve disjoint prospective instances use the same two resolutions and
+five starts.  Appendix~\ref{app:formulations} gives every mathematical
+formulation and data split.
+
+\subsection{Baselines, timing, and statistics}
+
+MadNLP exact CPU, host-staged GPU, DLPack GPU, and compact L-BFGS paths use the
+same JAX oracle.  cyipopt/Ipopt supplies an independent solver baseline with
+the same coordinate derivatives; OMLT+Ipopt supplies a full-space formulation
+baseline on PFR; and SLSQP appears only in a corrected low-dimensional
+box-constrained verification case.  We do not compare against penalty Adam: it
+changes the constraints and termination definition.  We also make no
+JAX-versus-PyTorch speed claim; PyTorch is used for checkpoint parity.
+
+Warm times exclude one preceding cold solve.  GPU work is synchronized.  Short
+controlled runs use ten repetitions; PFR cases 1/2/3 use five/five/five warm
+runs for the primary MadNLP paths where practical.  Instance/start sweeps use
+their sample distributions as repetitions and report medians and interquartile
+ranges.  A method succeeds only if it is finite and passes the common primal,
+dual, complementarity, bound, and raw application residual threshold.  The
+default threshold is $10^{-6}$; MNIST uses $10^{-7}$ solver KKT and $10^{-6}$
+raw feasibility.  Local objectives are compared only among successful solves.
+For replay-Darcy uncertainty, the sampling unit is one physical instance:
+starts are first aggregated within instance and paired method differences use
+a fixed-seed nonparametric bootstrap over the twelve instances.  Start-level
+winner counts are descriptive and are not treated as 120 independent samples.
+
+A fixed replay makes every initialization policy see the same 100 PFR NLPs;
+we vary shifted primal, equality-dual, barrier, and persistent state separately.
+A second ablation holds the latent/full resolutions, Fourier modes, precision,
+Hessian construction, and roughly 1.18M FNO parameters fixed while changing
+depth and width.  Appendix Tables~\ref{tab:warm-start} and
+\ref{tab:topology-memory} specify both designs and their exclusions.
+
+All measurements use a single compute server with an NVIDIA H100 80GB GPU and
+two Intel Xeon Platinum 8562Y+ sockets (64 physical cores total).
+CPU affinity and BLAS/OpenMP thread counts are fixed.  Peak memory is sampled
+from the complete process tree and matching GPU PIDs every 20--50\,ms with JAX
+preallocation disabled.  Appendix~\ref{app:repro} lists exact software versions
+and dataset/model checksums.

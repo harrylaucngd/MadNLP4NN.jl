@@ -1,0 +1,15 @@
+{
+  "model": "output/external/darcy_fd_replay/fno64_width32_m12_seed20260823.pt",
+  "data": "output/external/darcy_fd_replay/darcy_test_64.pt",
+  "selection_seed": 20260827,
+  "selection_excluded_pilot_samples": [114, 231, 253],
+  "samples": [255, 286, 317, 369, 531, 547, 566, 662, 668, 711, 940, 999],
+  "latent_resolutions": [16, 32],
+  "full_resolution": 64,
+  "lower_bound": -3.0,
+  "upper_bound": 3.0,
+  "initial_value": 0.0,
+  "regularization_weight": 0.0001,
+  "simulator_replay": true,
+  "coefficient_kind": "continuous_log_permeability"
+}

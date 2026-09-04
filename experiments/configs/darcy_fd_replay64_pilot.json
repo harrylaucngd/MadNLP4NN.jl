@@ -1,0 +1,20 @@
+{
+  "model": "output/external/darcy_fd_replay/fno64_width32_m12_seed20260823.pt",
+  "data": "output/external/darcy_fd_replay/darcy_test_64.pt",
+  "samples": [
+    114,
+    253,
+    231
+  ],
+  "latent_resolutions": [
+    16,
+    32
+  ],
+  "full_resolution": 64,
+  "lower_bound": -3.0,
+  "upper_bound": 3.0,
+  "initial_value": 0.0,
+  "regularization_weight": 0.0001,
+  "simulator_replay": true,
+  "coefficient_kind": "continuous_log_permeability"
+}

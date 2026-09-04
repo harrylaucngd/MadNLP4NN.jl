@@ -1,0 +1,11 @@
+{
+  "models": [
+    "output/external/mnist/mnist-tanh512nodes4layers.pt",
+    "output/external/mnist/mnist-tanh1024nodes4layers.pt"
+  ],
+  "data_dir": "output/external/mnist/data",
+  "sample": 6,
+  "expected_label": 4,
+  "adversarial_label": 9,
+  "threshold": 0.6
+}

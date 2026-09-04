@@ -1,16 +1,19 @@
 name = "MadNLP4NN"
 uuid = "8b5a4e10-9c3d-4f1e-8f2a-3e4d5c6f7a8b"
-authors = ["Hongxuan Liu", "Ziqi Wei"]
+authors = ["Anonymous"]
 version = "0.2.0"
 
 [deps]
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+CUDSS = "45b445bb-4962-46a0-9369-b4df9d0f772e"
+DLPack = "53c2dc0f-f7d5-43fd-8906-6c0220547083"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MadNLP = "2621e9c9-9eb4-46b1-8089-e8c72242dfb6"
-MadNLPMumps = "3b83494e-c0a4-4895-918b-9157a7a085a1"
+MadNLPGPU = "d72a61cc-809d-412f-99be-fd81f4b8a598"
 NLPModels = "a4795742-8479-5a88-8948-cc11e1c8c1a6"
 PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
@@ -19,11 +22,22 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
 ArgParse = "1"
-Flux = "0.14"
-ForwardDiff = "0.10"
+CUDA = "6"
+CUDSS = "0.8"
+DLPack = "0.3"
+Flux = "0.16"
+ForwardDiff = "1"
 JSON3 = "1.13"
-MadNLP = "0.7"
-NLPModels = "0.20"
+MadNLP = "0.10"
+MadNLPGPU = "0.10"
+NLPModels = "0.21"
 PythonCall = "0.9"
-Zygote = "0.6"
+Zygote = "0.7"
 julia = "1.9"
+
+[extras]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Random", "Test"]

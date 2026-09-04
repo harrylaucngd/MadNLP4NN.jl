@@ -1,0 +1,29 @@
+\begin{abstract}
+Optimizing through a fixed neural surrogate couples two computational systems:
+automatic differentiation through a network and a constrained nonlinear
+programming solver.  Moving the first to a GPU does not imply that the
+Karush--Kuhn--Tucker (KKT) system should follow, nor that exact curvature is the
+right model.  We present \method, an audited JAX--MadNLP interface that exposes
+neural derivatives through DLPack device buffers while preserving
+problem-supplied Jacobian and Lagrangian-Hessian sparsity.  We isolate four
+choices---structure disclosure, curvature, transfer semantics, and KKT
+placement---on controlled problems and three established neural-embedded NLP
+families.  Correct sparsity reduces a published neural NMPC solve from
+\PFRCaseOneDenseCPU\,s to \PFRCaseOneSparseCPU\,ms and reverses the CPU/GPU
+ranking; at 7,500 neural equalities, however, GPU KKT is
+\PFRCaseThreeSpeedup$\times$ faster than CPU KKT.  A prospectively evaluated
+curvature route raises Darcy inversion success from \DarcyRouteBase/\DarcyRouteTotal{}
+to \DarcyRouteTotal/\DarcyRouteTotal{} at \DarcyRouteOverhead\% additional warm
+time.  At a fixed FNO parameter budget of 1.18M, changing depth and width moves the
+exact-Hessian peak from \FNOShapeMinMemory{} to \FNOShapeMaxMemory{} GiB;
+parameter count alone does not predict second-order AD memory.  Finally,
+independent PDE replay shows that surrogate improvement need
+not transfer: Gauss--Newton lowers FNO residual relative to L-BFGS on all
+twelve physical instances, while the paired PDE change has a 95\% bootstrap
+interval spanning $\ReplayPairedPDEDeltaLow$ to
+$\ReplayPairedPDEDeltaHigh$ percentage points.  Descriptive start-level
+rankings agree in only \ReplayAgreement/\ReplayGroups{} matched groups.  The
+result is a reproducible regime map rather than a single GPU speedup: solver
+convergence, systems speed, and application validity remain distinct
+requirements.
+\end{abstract}

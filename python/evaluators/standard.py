@@ -127,9 +127,10 @@ class StandardEvaluator(BaseEvaluator):
         if self.m > 0:
             self._cons_jit = jax.jit(_cons)
             self._jac_jit = jax.jit(jax.jacobian(_cons))
-            self._hess_lag_fn = lambda x, y, w: jax.hessian(
-                lambda x_: _lagrangian(x_, y, w)
-            )(x)
+            self._hess_lag_jit = jax.jit(
+                jax.hessian(_lagrangian, argnums=0)
+            )
+            self._hess_lag_fn = self._hess_lag_jit
         else:
             self._cons_jit = lambda x: jnp.zeros(0, dtype=jnp.float64)
             self._jac_jit = lambda x: jnp.zeros((0, self.n), dtype=jnp.float64)

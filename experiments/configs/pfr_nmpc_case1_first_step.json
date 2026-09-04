@@ -1,0 +1,13 @@
+{
+  "model": "output/external/pfr_nmpc/case1/PFR_Tanh_n_neu24_layers6.pt",
+  "published_output": "output/external/pfr_nmpc/case1/published_greybox_usingfunc_output.pkl",
+  "prediction_horizon": 40,
+  "control_horizon": 10,
+  "current_state": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+  "previous_control": [0.5, 0.5],
+  "setpoint": 0.4,
+  "state_lower": 0.0,
+  "state_upper": 1.0,
+  "control_lower": 0.15,
+  "control_upper": 1.0
+}

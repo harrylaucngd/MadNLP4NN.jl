@@ -1,0 +1,13 @@
+{
+  "model": "output/external/neuraloperator_darcy/fno64_width32_m12_leftgrid_seed20260821.pt",
+  "data": "output/external/neuraloperator_darcy/darcy_test_64.pt",
+  "selection_seed": 20260822,
+  "selection_excluded_pilot_samples": [124, 393, 629],
+  "samples": [4, 104, 166, 195, 245, 256, 559, 652, 658, 750, 762, 991],
+  "latent_resolutions": [16, 32],
+  "full_resolution": 64,
+  "lower_bound": 0.0,
+  "upper_bound": 1.0,
+  "initial_value": 0.4991392195224762,
+  "regularization_weight": 0.0001
+}

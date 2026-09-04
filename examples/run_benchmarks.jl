@@ -39,9 +39,7 @@ const GPU_AVAILABLE = try
     @eval using MadNLPGPU; true
 catch; false; end
 
-const MUMPS_AVAILABLE = try
-    @eval using MadNLPMumps; true
-catch; false; end
+const MUMPS_AVAILABLE = true  # MUMPS is built into MadNLP >= 0.10
 
 println("="^80)
 println("MadNLP4NN — Unified Benchmark Harness")
@@ -95,22 +93,16 @@ function build_solver_matrix(device::String)
     if device == "cpu"
         push!(configs, (label="MUMPS_Sparse",
             opts=Dict{Symbol,Any}(
-                :linear_solver => MUMPS_AVAILABLE ? MadNLPMumps.MumpsSolver : nothing,
+                :linear_solver => MadNLP.MumpsSolver,
             )))
         push!(configs, (label="Umfpack_Sparse",
             opts=Dict{Symbol,Any}()))  # MadNLP default on CPU
     elseif device == "gpu"
         if GPU_AVAILABLE
-            push!(configs, (label="LapackGPU_Dense",
+            push!(configs, (label="cuDSS_HostStaged",
                 opts=Dict{Symbol,Any}(
-                    :linear_solver => Main.MadNLPGPU.LapackGPUSolver,
+                    :linear_solver => MadNLPGPU.CUDSSSolver,
                 )))
-            if isdefined(Main.MadNLPGPU, :CUDSSSolver)
-                push!(configs, (label="cuDSS_Sparse",
-                    opts=Dict{Symbol,Any}(
-                        :linear_solver => Main.MadNLPGPU.CUDSSSolver,
-                    )))
-            end
         else
             @warn "GPU device requested but MadNLPGPU not loaded"
         end
@@ -210,7 +202,7 @@ function benchmark_darcy(devices, quick)
 
             t0 = time()
             result = try
-                solve_nlp(nlp; opts...)
+                solve_nlp(nlp; kkt_device=device, opts...)
             catch e
                 @warn "  Solver failed: $e"
                 continue
@@ -296,7 +288,11 @@ function benchmark_pareto(devices, quick)
                 filter!(p -> p.second !== nothing, opts)
 
                 t0 = time()
-                result = try; solve_nlp(nlp; opts...) catch e; continue end
+                result = try
+                    solve_nlp(nlp; kkt_device=device, opts...)
+                catch e
+                    continue
+                end
                 elapsed = time() - t0
 
                 push!(times, elapsed)

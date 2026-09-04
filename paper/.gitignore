@@ -1,0 +1,24 @@
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+
+# Superseded working draft and bitmap renderings retained locally only.
+workshop_draft.*
+figures/*.png
+figures/main_figure_prompt.md
+figures/darcy_validity.pdf
+figures/mnist_iclr.pdf
+figures/mnist_scaling_quality.pdf
+figures/pfr_structure_sequence.pdf
+figures/sequence_topology.pdf
+references.bib
+
+# Identity-bearing local builds are never part of the anonymous repository.
+author_metadata.tex
+iclr_workshop_author.*

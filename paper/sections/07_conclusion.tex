@@ -1,0 +1,13 @@
+\section{Conclusion}
+
+There is no single best curvature model or device placement for neural-
+surrogate NLPs.  End-to-end GPU execution helps when repeated KKT
+factorizations dominate, hurts on small sparse systems, and can exhaust memory
+on neural-operator Hessians.  Parameter count, topology, barrier state, and KKT
+placement describe different boundaries; a surrogate KKT point still does not
+certify the simulator.
+
+Our evidence supports a practical order: expose structure, audit common
+residuals, choose curvature with failures visible, measure the device boundary,
+place the KKT system, and then validate the application.  \method{} and the
+benchmark suite make this regime map executable and falsifiable.

@@ -1,0 +1,6 @@
+[
+  {"name": "tiny", "n": 64, "m": 8, "width": 128, "depth": 3},
+  {"name": "small", "n": 256, "m": 16, "width": 256, "depth": 3},
+  {"name": "mnist_like", "n": 784, "m": 10, "width": 512, "depth": 4},
+  {"name": "field_32", "n": 1024, "m": 16, "width": 256, "depth": 3}
+]

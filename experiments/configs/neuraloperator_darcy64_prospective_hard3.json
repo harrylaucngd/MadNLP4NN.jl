@@ -1,0 +1,12 @@
+{
+  "model": "output/external/neuraloperator_darcy/fno64_width32_m12_leftgrid_seed20260821.pt",
+  "data": "output/external/neuraloperator_darcy/darcy_test_64.pt",
+  "selection_source": "neuraloperator_darcy64_prospective12_lbfgs.json common-KKT failures",
+  "samples": [245, 658, 991],
+  "latent_resolutions": [16, 32],
+  "full_resolution": 64,
+  "lower_bound": 0.0,
+  "upper_bound": 1.0,
+  "initial_value": 0.4991392195224762,
+  "regularization_weight": 0.0001
+}

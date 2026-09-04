@@ -575,12 +575,15 @@ function NLPModels.jac_structure!(
     rows::AbstractVector{<:Integer},
     cols::AbstractVector{<:Integer}
 )
-    n = nlp.meta.nvar
-    m = nlp.meta.ncon
-    
-    idx = 1
-    for i in 1:m
-        for j in 1:n
+    if nlp.use_python
+        structure = nlp.python_evaluator.jacobian_structure()
+        rows .= pyconvert(Vector{Int}, structure[0]) .+ 1
+        cols .= pyconvert(Vector{Int}, structure[1]) .+ 1
+    else
+        n = nlp.meta.nvar
+        m = nlp.meta.ncon
+        idx = 1
+        for i in 1:m, j in 1:n
             rows[idx] = i
             cols[idx] = j
             idx += 1
@@ -610,17 +613,8 @@ function NLPModels.jac_coord!(
     eval_time = @elapsed begin
         if nlp.use_python
             # Use Python/JAX backend
-            J_py = nlp.python_evaluator.evaluate_jac(x)
-            J = pyconvert(Matrix{Float64}, J_py)
-            
-            # Fill vals in row-major order
-            idx = 1
-            for i in 1:nlp.meta.ncon
-                for j in 1:nlp.meta.nvar
-                    vals[idx] = J[i, j]
-                    idx += 1
-                end
-            end
+            coordinates = nlp.python_evaluator.evaluate_jac_coord(x)
+            vals .= pyconvert(Vector{Float64}, coordinates)
         else
             # Use specified AD backend
             jac_func = x_val -> begin
@@ -656,6 +650,105 @@ function NLPModels.jac_coord!(
 end
 
 
+function NLPModels.jac_dense!(
+    nlp::NeuralNetworkNLPModel,
+    x::AbstractVector,
+    jacobian::AbstractMatrix,
+)
+    NLPModels.increment!(nlp, :neval_jac)
+    isempty(jacobian) && return jacobian
+    elapsed = @elapsed begin
+        if nlp.use_python
+            py_jacobian = nlp.python_evaluator.evaluate_jac(x)
+            jacobian .= pyconvert(Matrix{Float64}, py_jacobian)
+        else
+            jacobian_function = x_value -> evaluate(nlp.constraint_func, x_value)
+            jacobian .= ForwardDiff.jacobian(jacobian_function, x)
+        end
+    end
+    record_eval_time!(nlp.timing_stats, elapsed, :jac)
+    return jacobian
+end
+
+
+function NLPModels.hess_dense!(
+    nlp::NeuralNetworkNLPModel,
+    x::AbstractVector,
+    y::AbstractVector,
+    hessian::AbstractMatrix;
+    obj_weight=1.0,
+)
+    NLPModels.increment!(nlp, :neval_hess)
+    elapsed = @elapsed begin
+        if nlp.use_python
+            py_hessian = nlp.python_evaluator.evaluate_hess(x, y, obj_weight)
+            hessian .= pyconvert(Matrix{Float64}, py_hessian)
+        else
+            lagrangian = x_value -> begin
+                output = nlp.neural_network(x_value)
+                value = obj_weight * evaluate(nlp.objective_func, x_value, output)
+                if nlp.constraint_func !== nothing && !isempty(y)
+                    value += dot(y, evaluate(nlp.constraint_func, x_value))
+                end
+                return value
+            end
+            hessian .= _compute_hessian(lagrangian, collect(x), nlp.ad_backend)
+        end
+    end
+    record_eval_time!(nlp.timing_stats, elapsed, :hess)
+    return hessian
+end
+
+
+"""Matrix-free constraint Jacobian product required by quasi-Newton MadNLP."""
+function NLPModels.jprod!(
+    nlp::NeuralNetworkNLPModel,
+    x::AbstractVector,
+    vector::AbstractVector,
+    product::AbstractVector,
+)
+    NLPModels.increment!(nlp, :neval_jprod)
+    isempty(product) && return product
+    elapsed = @elapsed begin
+        if nlp.use_python
+            py_product = nlp.python_evaluator.evaluate_jprod(x, vector)
+            product .= pyconvert(Vector{Float64}, py_product)
+        else
+            jacobian_function = x_value -> evaluate(nlp.constraint_func, x_value)
+            jacobian = ForwardDiff.jacobian(jacobian_function, x)
+            mul!(product, jacobian, vector)
+        end
+    end
+    record_eval_time!(nlp.timing_stats, elapsed, :jac)
+    return product
+end
+
+
+"""Matrix-free transpose-Jacobian product required by quasi-Newton MadNLP."""
+function NLPModels.jtprod!(
+    nlp::NeuralNetworkNLPModel,
+    x::AbstractVector,
+    vector::AbstractVector,
+    product::AbstractVector,
+)
+    NLPModels.increment!(nlp, :neval_jtprod)
+    fill!(product, 0.0)
+    isempty(vector) && return product
+    elapsed = @elapsed begin
+        if nlp.use_python
+            py_product = nlp.python_evaluator.evaluate_jtprod(x, vector)
+            product .= pyconvert(Vector{Float64}, py_product)
+        else
+            jacobian_function = x_value -> evaluate(nlp.constraint_func, x_value)
+            jacobian = ForwardDiff.jacobian(jacobian_function, x)
+            mul!(product, transpose(jacobian), vector)
+        end
+    end
+    record_eval_time!(nlp.timing_stats, elapsed, :jac)
+    return product
+end
+
+
 """
     NLPModels.hess_structure!(nlp::NeuralNetworkNLPModel, rows, cols)
 
@@ -666,11 +759,14 @@ function NLPModels.hess_structure!(
     rows::AbstractVector{<:Integer},
     cols::AbstractVector{<:Integer}
 )
-    n = nlp.meta.nvar
-    
-    idx = 1
-    for j in 1:n
-        for i in j:n  # Lower triangle
+    if nlp.use_python
+        structure = nlp.python_evaluator.hessian_structure()
+        rows .= pyconvert(Vector{Int}, structure[0]) .+ 1
+        cols .= pyconvert(Vector{Int}, structure[1]) .+ 1
+    else
+        n = nlp.meta.nvar
+        idx = 1
+        for j in 1:n, i in j:n
             rows[idx] = i
             cols[idx] = j
             idx += 1
@@ -702,18 +798,10 @@ function NLPModels.hess_coord!(
     eval_time = @elapsed begin
         if nlp.use_python
             # Use Python/JAX backend
-            H_py = nlp.python_evaluator.evaluate_hess(x, y, obj_weight)
-            H = pyconvert(Matrix{Float64}, H_py)
-            
-            # Extract lower triangle
-            idx = 1
-            n = nlp.meta.nvar
-            for j in 1:n
-                for i in j:n
-                    vals[idx] = H[i, j]
-                    idx += 1
-                end
-            end
+            coordinates = nlp.python_evaluator.evaluate_hess_coord(
+                x, y, obj_weight,
+            )
+            vals .= pyconvert(Vector{Float64}, coordinates)
         else
             # Use specified AD backend (ForwardDiff or Zygote)
             n = nlp.meta.nvar
@@ -848,11 +936,15 @@ function solve_nlp(
     tol=1e-6,
     print_level=MadNLP.INFO,
     linear_solver=nothing,
+    kkt_device::String="cpu",
     kwargs...
 )
+    kkt_device in ("cpu", "gpu") ||
+        throw(ArgumentError("kkt_device must be \"cpu\" or \"gpu\", got $kkt_device"))
     @info "Solving NLP with MadNLP..."
     @info "  Variables: $(nlp.meta.nvar)"
     @info "  Constraints: $(nlp.meta.ncon)"
+    @info "  KKT device: $kkt_device"
     
     # Build solver options  
     options = Dict{Symbol, Any}(
@@ -861,24 +953,50 @@ function solve_nlp(
         :print_level => print_level
     )
     
-    # Add linear solver if specified
-    if linear_solver !== nothing
-        options[:linear_solver] = linear_solver
+    # The current NeuralNetworkNLPModel owns host vectors. SparseWrapperModel
+    # makes the KKT path GPU resident while retaining host callbacks. This is a
+    # deliberately named host-staged baseline: x is copied to the host for each
+    # callback and derivatives are copied back to the device. The zero-copy
+    # DLPack model is implemented separately and must not be conflated with this
+    # path in benchmark labels.
+    solver_model = nlp
+    host_staged = false
+    if kkt_device == "gpu"
+        CUDA.functional() || error("GPU KKT requested but CUDA.jl is not functional")
+        callback_type = get(kwargs, :callback, MadNLP.SparseCallback)
+        solver_model = if callback_type === MadNLP.DenseCallback
+            MadNLP.DenseWrapperModel(CuArray, nlp)
+        else
+            MadNLP.SparseWrapperModel(CuArray, nlp)
+        end
+        host_staged = true
+        linear_solver === nothing &&
+            (linear_solver = MadNLPGPU.CUDSSSolver)
+        @info "  Transfer path: host-staged SparseWrapperModel"
     end
+
+    # Add linear solver if specified.
+    linear_solver !== nothing && (options[:linear_solver] = linear_solver)
     
     # Merge additional options
     merge!(options, Dict(kwargs))
     
     # Create and solve. Convert Dict -> NamedTuple so keyword forwarding is explicit.
     solver_kwargs = (; pairs(options)...)
-    solver = MadNLPSolver(nlp; solver_kwargs...)
+    solver = MadNLPSolver(solver_model; solver_kwargs...)
     result = MadNLP.solve!(solver)
+    complementarity = MadNLP.get_inf_compl(solver)
+    kkt_error = MadNLP.get_kkt_error(solver)
     
     # Extract solution information
     status = result.status
     # Extract only primal variables (not dual variables)
     # MadNLP's result.solution contains [x; y] where x are primal and y are dual
-    solution = copy(result.solution[1:nlp.meta.nvar])
+    raw_solution = result.solution[1:nlp.meta.nvar]
+    solution = raw_solution isa CuArray ? Array(raw_solution) : copy(raw_solution)
+    raw_multipliers = result.multipliers
+    multipliers = raw_multipliers isa CuArray ?
+        Array(raw_multipliers) : copy(raw_multipliers)
     objective = result.objective
     iter_count = result.iter
     
@@ -892,10 +1010,18 @@ function solve_nlp(
     return Dict(
         :status => status,
         :solution => solution,  # Only primal variables
+        :multipliers => multipliers,
         :objective => objective,
         :iter_count => iter_count,
+        :primal_feas => result.primal_feas,
+        :dual_feas => result.dual_feas,
+        :complementarity => complementarity,
+        :kkt_error => kkt_error,
+        :solver_counters => result.counters,
         :nlp_model => nlp,
-        :timing_stats => timing_stats
+        :timing_stats => timing_stats,
+        :kkt_device => kkt_device,
+        :host_staged => host_staged,
     )
 end
 
@@ -1253,20 +1379,17 @@ end
 """
     select_linear_solver(device::String)
 
-Return the recommended MadNLP linear solver type for the given device
-("cpu" or "gpu").  Returns `nothing` on "cpu" to let MadNLP auto-select
-Umfpack, or the GPU solver type when MadNLPGPU is available.
+Return the recommended MadNLP linear solver type for the given KKT device
+("cpu" or "gpu"). MadNLP 0.10 includes MUMPS directly; NVIDIA GPU KKT
+systems use cuDSS.
 """
 function select_linear_solver(device::String)
+    device in ("cpu", "gpu") ||
+        throw(ArgumentError("device must be \"cpu\" or \"gpu\", got $device"))
     if device == "gpu"
-        # Check whether MadNLPGPU is loaded
-        if isdefined(Main, :MadNLPGPU)
-            @info "GPU device: using MadNLPGPU.LapackGPUSolver"
-            return Main.MadNLPGPU.LapackGPUSolver
-        else
-            @warn "GPU device requested but MadNLPGPU is not loaded; falling back to CPU solver"
-        end
+        CUDA.functional() || error("GPU solver requested but CUDA.jl is not functional")
+        @info "GPU KKT: using MadNLPGPU.CUDSSSolver"
+        return MadNLPGPU.CUDSSSolver
     end
-    return nothing  # let MadNLP pick (Umfpack on CPU)
+    return MadNLP.MumpsSolver
 end
-

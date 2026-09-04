@@ -1,34 +1,92 @@
 # MadNLP4NN.jl
 
-A GPU-oriented reduced-space interior-point framework for constrained optimization over trained neural networks, with two proposal-aligned validation case studies.
+A research framework for constrained nonlinear optimization through fixed
+neural surrogates, combining JAX automatic differentiation with MadNLP's CPU
+and NVIDIA-GPU KKT implementations.
+
+> **Validated research snapshot (August 2026).** The registered experiment
+> schedule, CPU/GPU regressions, manuscript, and 31-check claim audit are
+> complete for the current paper. The historical course-report benchmarks are
+> not evidence for the current claims; their synthetic Pareto benchmark and
+> inverse-crime Darcy timing study are excluded from the paper evaluation.
+> The hypotheses, benchmark protocol, literature audit, and decision log are in
+> [`docs/research/RESEARCH_PLAN.md`](docs/research/RESEARCH_PLAN.md),
+> [`docs/research/LITERATURE_MAP.md`](docs/research/LITERATURE_MAP.md), and
+> [`docs/research/PILOT_RESULTS.md`](docs/research/PILOT_RESULTS.md). The
+> claim boundaries and reviewer-facing positioning are in
+> [`docs/research/SUBMISSION_STRATEGY.md`](docs/research/SUBMISSION_STRATEGY.md).
+> The deliberately unresolved simulator metadata for the historical public
+> Darcy artifact, and the completed independently replayable replacement, are
+> documented in
+> [`docs/research/DARCY_DATA_AUDIT.md`](docs/research/DARCY_DATA_AUDIT.md).
+> The complete anonymous ICLR-format manuscript is in
+> [`paper/iclr_workshop.pdf`](paper/iclr_workshop.pdf).
+> Large datasets, checkpoints, and raw run records remain under the ignored
+> `output/` tree; a clone contains the source, immutable configurations,
+> derived paper tables/figures, and final manuscript, but not those multi-GB
+> numerical artifacts.
 
 ## Overview
 
-MadNLP4NN.jl solves nonlinear programs of the form
+MadNLP4NN.jl targets nonlinear programs of the form
 
 ```
 min_{x ∈ ℝⁿ}  F(x, N_θ(x))
 subject to    c(x, N_θ(x)) ≤ 0,   ℓ ≤ x ≤ u
 ```
 
-where `N_θ` is one or more fixed trained neural networks and `x` is the decision variable.  The optimization methodology is fixed: a **reduced-space interior-point solver** (MadNLP.jl) with derivatives supplied by a **JIT-compiled JAX backend** through PythonCall.jl, with a Julia/Flux+Zygote fallback.
+where `N_θ` is one or more fixed trained neural networks and `x` is the decision
+variable. The current primary path is a reduced/gray-box MadNLP formulation with
+JIT-compiled JAX derivatives. Three execution placements are distinguished
+explicitly:
 
-Two structured case studies from the accompanying proposal are fully implemented:
+| Label | Neural AD | KKT | Transfer semantics |
+|---|---|---|---|
+| `gpu_ad_cpu_kkt` | H100 | CPU | JAX results materialized on host |
+| `host_staged_gpu_kkt` | H100 | H100/cuDSS | GPU -> host callbacks -> GPU |
+| `dlpack_gpu_kkt` | H100 | H100/cuDSS | zero-copy framework exchange plus device-to-device callback-buffer copy |
+
+The paper benchmark plan replaces the old two-case setup with:
 
 | Case Study | Problem | Key constraints |
 |---|---|---|
-| **I: Darcy Inversion** | Recover permeability field from FNO pressure surrogate | box + budget (1ᵀx ≤ B) + smoothness (xᵀLx ≤ τ) |
-| **II: Pareto Tracing** | Weighted-sum constrained front over learned f₁, f₂, h | learned feasibility h(x) ≤ 0 |
+| **Controlled oracle** | Independently vary decision dimension `n`, output/constraint dimension `m`, and network parameters `p` | planted smooth MLP |
+| **NeuralOperator elliptic Darcy inversion** | Bilinear latent coefficient -> trained FNO -> held-out deterministic PDE solution | public-artifact coefficient audit plus a fully specified, independently replayed PDE split |
+| **Published PFR NMPC** | Reproduce the three PDE-surrogate control cases of Elorza Casas et al. | published mechanistic validation and pretrained networks |
+| **Adversarial MNIST** | Replicate the closest prior MathOptAI/Ipopt scaling experiment | direct-prior-work comparison |
+
+The synthetic Pareto case remains an API example only.
 
 ## Key Capabilities
 
-- **Reduced-space NLP**: KKT system size depends only on the decision variable dimension, not the network size
-- **Dual AD backends**: Python/JAX (primary, GPU-capable, JIT-compiled) and Julia/Flux+Zygote (baseline)
-- **Explicit CPU/NVIDIA GPU paths**: single `device="cpu"|"gpu"` flag controls both JAX device and MadNLP linear solver selection
+- **Reduced/gray-box NLP**: KKT dimensions do not grow with hidden activations
+- **Zero-copy GPU interoperability**: DLPack-verified CUDA pointer sharing between CUDA.jl and JAX
+- **Separated placement controls**: neural AD placement and KKT placement are benchmarked independently
+- **Exact and matrix-free derivative APIs**: gradients, Jacobian coordinates, Lagrangian Hessians, JVPs, and VJPs
+- **Structure-aware KKT disclosure**: evaluators may declare sparse Jacobian and Hessian patterns instead of forcing dense coordinates
+- **Current MadNLP GPU stack**: MadNLP 0.10, MadNLPGPU 0.10, and cuDSS 0.8
 - **Composable problem types**: `ProblemSpec` decouples network paths, objectives, and constraints from the solver
-- **New constraint types**: `BudgetConstraint`, `SmoothnessConstraint`, `LearnedFeasibilityConstraint`
-- **New objective types**: `SurrogateInversionObjective`, `WeightedScalarizationObjective`
-- **FNO2D in JAX**: pure functional implementation supporting checkpoint loading from our format and neuraloperator-style checkpoints
+- **Established FNO support**: parity-tested JAX implementations for the PDEBench smoke test and the deterministic/replayable Darcy studies
+
+The latest validated snapshot is generated by
+`experiments/analysis/summarize_results.py`. Current headline diagnostics are:
+
+- prospective Darcy curvature routing: 120/120 KKT successes versus 115/120
+  for L-BFGS alone, with 7.7% total-time overhead;
+- structure-aware PFR first step: MadNLP CPU exact 43.3 ms and same-oracle
+  cyipopt exact 43.9 ms;
+- PFR 100-step closed loop: CPU exact 29.3 ms median with 100/100 success;
+  persistent GPU is 24.8 ms median but has an unacceptable fallback tail.
+- published PFR case 3: exact DLPack/cuDSS 2.27 s versus MadNLP CPU/MUMPS
+  19.71 s, cyipopt/Ipopt 27.84 s, and compact L-BFGS 530.36 s at the common
+  KKT audit; the GPU path peaks at 43.90 GiB.
+- independently replayable prospective Darcy sweep: 360/360 KKT successes, but the method
+  ranking by FNO residual agrees descriptively with the sparse-PDE ranking in
+  only 35/120 matched groups; at the 12-instance level, Gauss--Newton's FNO
+  gain is significant while its paired PDE change is not;
+- 5.01M-parameter MNIST five-start audit: 15/15 feasible solves; L-BFGS is
+  fastest but has median local objective 5.590 versus 4.736 for both exact
+  paths.
 
 ## Project Structure
 
@@ -42,6 +100,8 @@ MadNLP4NN.jl/
 │   ├── nlp_interface.jl           # Objectives, constraints, model loading
 │   ├── problem_spec.jl            # ProblemSpec + new types + Laplacian helpers
 │   ├── nlp_model.jl               # NeuralNetworkNLPModel, ProblemSpec constructor
+│   ├── gpu_interop.jl              # CUDA.jl/JAX DLPack bridge
+│   ├── gpu_nlp_model.jl            # GPU-resident NLPModels adapter
 │   ├── python_interface.jl        # Julia → Python bridge (Darcy / Pareto training)
 │   ├── darcy_problem.jl           # DarcyProblemConfig + staged constructors
 │   └── pareto_problem.jl          # ParetoProblemConfig + sweep + quality metrics
@@ -56,24 +116,31 @@ MadNLP4NN.jl/
 │   │   ├── base.py                # BaseEvaluator interface
 │   │   ├── standard.py            # Single-network target-matching
 │   │   ├── multi_network.py       # Multi-network Pareto evaluator
-│   │   └── darcy.py               # FNO inversion evaluator
+│   │   ├── darcy.py               # legacy FNO inversion evaluator
+│   │   ├── pdebench_darcy.py      # latent neural-operator inversion
+│   │   └── pfr_nmpc.py            # published gray-box NMPC
 │   └── models/
 │       ├── mlp.py                 # MLP / ResMLP builders
 │       ├── resnet.py              # Generic ResNet builder
-│       └── fno.py                 # FNO2D builder (new)
+│       ├── fno.py                 # legacy FNO2D builder
+│       ├── pdebench_fno.py        # parity-tested FNO2D builder
+│       └── pfr_pinn.py            # published PFR tanh network loader
 ├── examples/
 │   ├── run_darcy_inversion.jl     # Case Study I: staged Darcy experiments
 │   ├── run_pareto_tracing.jl      # Case Study II: Pareto sweep
 │   ├── run_benchmarks.jl          # Unified CPU/GPU benchmark harness
+├── experiments/                   # configs, runners, monitors, aggregation
 └── test/
-    └── runtests.jl                # Regression + correctness tests
+    ├── runtests.jl                # CPU regression + correctness tests
+    └── gpu/runtests.jl            # host-staged and DLPack GPU integration
 ```
 
 ## Installation
 
 ### Prerequisites
-- Julia 1.9+
-- Python 3.9+ with JAX, PyTorch, NumPy, SciPy
+- Julia 1.12 for the exact locked research environment (`Project.toml` retains
+  package compatibility with Julia 1.9+)
+- Python 3.11 with JAX, PyTorch, NumPy, and SciPy
 - CUDA (optional, for NVIDIA GPU paths)
 
 ### Step 1: Julia packages
@@ -83,24 +150,28 @@ using Pkg; Pkg.activate("."); Pkg.instantiate()
 
 ### Step 2: Python dependencies
 ```bash
-pip install -r python/requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r python/requirements.txt
 # For GPU JAX:
-pip install "jax[cuda12]"
-# For FNO training:
-pip install optax
+python -m pip install --upgrade "jax[cuda12]"
+# Optional Ipopt baseline environment:
+python -m pip install -r python/requirements-baselines.txt
 ```
 
 ### Step 3: Configure PythonCall
-```julia
-# In startup.jl or before using MadNLP4NN:
-ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
-ENV["JULIA_PYTHONCALL_EXE"] = "/opt/anaconda3/envs/madnlp4nn/bin/python"
+```bash
+export JULIA_CONDAPKG_BACKEND=Null
+export JULIA_PYTHONCALL_EXE="$(command -v python)"
+julia --project=. startup.jl
 ```
 
-### Step 4 (optional): GPU solver
-```julia
-using Pkg; Pkg.add("MadNLPGPU")
-```
+`startup.jl` uses the active `python3`/`python` automatically when the
+environment variables are omitted; it contains no machine-specific paths.
+
+CUDA.jl, MadNLPGPU, cuDSS, and DLPack are declared project dependencies. A CPU
+installation may instantiate them without using a GPU, but GPU tests require a
+working NVIDIA driver and JAX CUDA build.
 
 ## Quick Start
 
@@ -128,7 +199,7 @@ julia examples/run_pareto_tracing.jl --stage B --n_dim 20
 julia examples/run_pareto_tracing.jl --stage C --n_dim 20 --n_alpha 21 --n_starts 5
 ```
 
-### Unified Benchmark
+### Legacy compatibility harness (not paper benchmarks)
 ```julia
 # Quick smoke test
 julia examples/run_benchmarks.jl --quick
@@ -156,7 +227,7 @@ cfg = DarcyProblemConfig(
     device = "gpu"     # or "cpu"
 )
 nlp = create_darcy_nlp(cfg)
-result = solve_nlp(nlp, max_iter=500, tol=1e-4)
+result = solve_nlp(nlp; kkt_device="gpu", max_iter=500, tol=1e-4)
 ```
 
 ### Darcy Inversion (Stage B: with budget + smoothness)
@@ -170,6 +241,7 @@ cfg_b = DarcyProblemConfig(
     device = "cpu",
 )
 nlp = create_darcy_nlp(cfg_b)
+result_b = solve_nlp(nlp; kkt_device="cpu")
 ```
 
 ### Pareto Sweep
@@ -225,12 +297,12 @@ nlp = NeuralNetworkNLPModel(spec; device="gpu")
 
 ## Backend Selection
 
-| Problem size | Recommended backend | AD method |
-|---|---|---|
-| n < 100 | Julia/Flux | ForwardDiff |
-| 100 ≤ n < 500 | Julia/Flux | Zygote (default) |
-| n ≥ 500 | Python/JAX | JAX native (JIT, GPU) |
-| FNO / multi-network | Python/JAX | JAX native (required) |
+There is no size-only backend rule. Pilot results show that the useful choice
+depends separately on decision dimension, network compute, constraint/output
+dimension, curvature strategy, and reuse count. In particular, an explicit FNO
+Hessian exhausted roughly 40 GiB of working memory at only `n=1024`, while a
+compact L-BFGS solve converged without Hessian calls. Use the experiment
+protocol and measured regime map instead of the old `n < 100` heuristic.
 
 ## References
 
@@ -243,9 +315,8 @@ nlp = NeuralNetworkNLPModel(spec; device="gpu")
 
 ## Notes
 
-- The repository is now proposal-focused. Historical classification-era
-  ablation scripts, training pipelines, and associated documentation/assets
-  have been removed.
+- The research snapshot is finalized. Existing Darcy/Pareto examples are
+  compatibility examples, not the registered paper benchmark suite.
 - Proposal-era FNO checkpoints are stored as `.npz` files under
   `output/darcy/models/`.
 - Pareto surrogate checkpoints are stored as `.pt` files under

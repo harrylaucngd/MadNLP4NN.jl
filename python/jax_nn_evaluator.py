@@ -53,6 +53,10 @@ from models.fno import build_fno2d_jax, fno2d_forward
 from evaluators.standard import StandardEvaluator
 from evaluators.multi_network import MultiNetworkEvaluator
 from evaluators.darcy import DarcyInversionEvaluator
+from evaluators.pdebench_darcy import PDEBenchDarcyLatentEvaluator
+from evaluators.pfr_nmpc import PFRNMPCEvaluator
+from evaluators.mnist_adversarial import MNISTAdversarialEvaluator
+from evaluators.pfr_cnn_nmpc import PFRCNNNMPCEvaluator
 
 log = logging.getLogger(__name__)
 
@@ -179,6 +183,46 @@ def create_darcy_evaluator(
     )
 
 
+def create_pdebench_darcy_evaluator(
+    fno_path: str,
+    target_pressure,
+    x0,
+    *,
+    reference_field=None,
+    full_resolution: int = 128,
+    observation_indices=None,
+    regularization_weight: float = 1e-4,
+    binary_weight: float = 0.0,
+    mean_lower=None,
+    mean_upper=None,
+    tv_upper=None,
+    device: str = "gpu",
+):
+    """Create the latent-field PDEBench Darcy inversion evaluator."""
+    dm = DeviceManager(device)
+    loader = ModelLoader(dm)
+    forward_fn, params, _ = loader.load(fno_path)
+    return PDEBenchDarcyLatentEvaluator(
+        forward_fn,
+        params,
+        np.asarray(target_pressure, dtype=np.float64),
+        np.asarray(x0, dtype=np.float64),
+        reference_field=(
+            None
+            if reference_field is None
+            else np.asarray(reference_field, dtype=np.float64)
+        ),
+        full_resolution=full_resolution,
+        observation_indices=observation_indices,
+        regularization_weight=regularization_weight,
+        binary_weight=binary_weight,
+        mean_lower=mean_lower,
+        mean_upper=mean_upper,
+        tv_upper=tv_upper,
+        device_manager=dm,
+    )
+
+
 def create_pareto_evaluator(
     f1_path: str,
     f2_path: str,
@@ -224,6 +268,136 @@ def create_pareto_evaluator(
         x0=np.array(x0, dtype=np.float64),
         device_manager=dm,
     )
+
+
+def create_pfr_nmpc_evaluator(
+    model_path: str,
+    current_state,
+    previous_control,
+    setpoint: float,
+    *,
+    prediction_horizon: int = 40,
+    control_horizon: int = 10,
+    parameters_as_variables: bool = False,
+    device: str = "gpu",
+) -> PFRNMPCEvaluator:
+    """Create the published case-study-1 PFR gray-box NMPC oracle."""
+    dm = DeviceManager(device)
+    loader = ModelLoader(dm)
+    forward_fn, params, _ = loader.load(model_path)
+    return PFRNMPCEvaluator(
+        forward_fn,
+        params,
+        np.asarray(current_state, dtype=np.float64),
+        np.asarray(previous_control, dtype=np.float64),
+        setpoint,
+        prediction_horizon=prediction_horizon,
+        control_horizon=control_horizon,
+        parameters_as_variables=parameters_as_variables,
+        device_manager=dm,
+    )
+
+
+def create_mnist_adversarial_evaluator(
+    model_path: str,
+    reference_image,
+    adversarial_label: int,
+    *,
+    threshold: float = 0.6,
+    device: str = "gpu",
+) -> MNISTAdversarialEvaluator:
+    """Create the closest-prior L1 adversarial MNIST problem oracle."""
+    dm = DeviceManager(device)
+    loader = ModelLoader(dm)
+    forward_fn, params, _ = loader.load(model_path)
+    return MNISTAdversarialEvaluator(
+        forward_fn,
+        params,
+        np.asarray(reference_image, dtype=np.float64),
+        adversarial_label,
+        threshold=threshold,
+        device_manager=dm,
+    )
+
+
+def create_pfr_cnn_nmpc_evaluator(
+    model_path: str,
+    current_state,
+    previous_control,
+    tracking_channels,
+    tracking_indices,
+    tracking_targets,
+    tracking_scales,
+    control_scales,
+    *,
+    prediction_horizon: int,
+    control_horizon: int,
+    device: str = "gpu",
+) -> PFRCNNNMPCEvaluator:
+    dm = DeviceManager(device)
+    loader = ModelLoader(dm)
+    forward_fn, params, config = loader.load(model_path)
+    return PFRCNNNMPCEvaluator(
+        forward_fn,
+        params,
+        config,
+        np.asarray(current_state, dtype=np.float64),
+        np.asarray(previous_control, dtype=np.float64),
+        tracking_channels,
+        tracking_indices,
+        tracking_targets,
+        tracking_scales,
+        control_scales,
+        prediction_horizon=prediction_horizon,
+        control_horizon=control_horizon,
+        device_manager=dm,
+    )
+
+
+def load_pfr_cnn_published_case(output_path: str, case: int):
+    """Load first-step state/control data from the companion PFR artifacts."""
+    import pickle
+
+    with open(output_path, "rb") as handle:
+        data = pickle.load(handle)
+    if case == 2:
+        current = np.concatenate((data["C"][0], data["T"][0]))
+        previous = np.asarray(
+            [data["F"][0], data["Ta"][0], data["C0"][0], data["T0"][0]],
+            dtype=np.float64,
+        )
+        first = np.asarray(
+            [data["F"][1], data["Ta"][1], data["C0"][1], data["T0"][1]],
+            dtype=np.float64,
+        )
+    elif case == 3:
+        components = ["CH4", "H2O", "H2", "CO", "CO2"]
+        spatial = sorted(
+            key[1]
+            for key in data
+            if isinstance(key, tuple) and key[0] == "FCH4" and key[1] != 0
+        )
+        current = np.concatenate(
+            [
+                [data[(f"F{component}", location)][0] for location in spatial]
+                for component in components
+            ]
+        )
+        previous = np.asarray(
+            [data["FCH4_in"][0], data["FH2O_in"][0], data["T_in"][0]],
+            dtype=np.float64,
+        )
+        first = np.asarray(
+            [data["FCH4_in"][1], data["FH2O_in"][1], data["T_in"][1]],
+            dtype=np.float64,
+        )
+    else:
+        raise ValueError("PFR CNN case must be 2 or 3")
+    return {
+        "current_state": np.asarray(current, dtype=np.float64),
+        "previous_control": previous,
+        "published_first_control": first,
+    }
 
 
 # ============================================================================

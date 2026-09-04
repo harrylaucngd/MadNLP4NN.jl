@@ -1,0 +1,17 @@
+[
+  {"name": "n64_pfixed", "n": 64, "m": 16, "width": 512, "depth": 4},
+  {"name": "n256_pfixed", "n": 256, "m": 16, "width": 512, "depth": 4},
+  {"name": "n784_pfixed", "n": 784, "m": 16, "width": 512, "depth": 4},
+  {"name": "n1024_pfixed", "n": 1024, "m": 16, "width": 512, "depth": 4},
+  {"name": "n2048_pfixed", "n": 2048, "m": 16, "width": 512, "depth": 4},
+
+  {"name": "p_w64", "n": 784, "m": 10, "width": 64, "depth": 4},
+  {"name": "p_w256", "n": 784, "m": 10, "width": 256, "depth": 4},
+  {"name": "p_w1024", "n": 784, "m": 10, "width": 1024, "depth": 4},
+  {"name": "p_w4096", "n": 784, "m": 10, "width": 4096, "depth": 4},
+
+  {"name": "m1", "n": 256, "m": 1, "width": 512, "depth": 3},
+  {"name": "m16", "n": 256, "m": 16, "width": 512, "depth": 3},
+  {"name": "m64", "n": 256, "m": 64, "width": 512, "depth": 3},
+  {"name": "m256", "n": 256, "m": 256, "width": 512, "depth": 3}
+]

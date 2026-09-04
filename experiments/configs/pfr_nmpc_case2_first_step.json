@@ -1,0 +1,12 @@
+{
+  "case": 2,
+  "model": "output/external/pfr_nmpc/case2/2PDEs_Tanh_32hc_2lay.pt",
+  "published_output": "output/external/pfr_nmpc/case2/published_greybox_usingfunc_output.pkl",
+  "prediction_horizon": 40,
+  "control_horizon": 10,
+  "tracking_channels": [0, 1],
+  "tracking_indices": [9, 9],
+  "tracking_targets": [570.0, 315.0],
+  "tracking_scales": [3610000.0, 400.0],
+  "control_scales": [0.00001927807967523541, 400.0, 3610000.0, 400.0]
+}

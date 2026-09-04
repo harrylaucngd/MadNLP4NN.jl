@@ -1,0 +1,74 @@
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Neural predictors inside mathematical programs.}
+Smooth neural networks may be exposed layer by layer (full space), composed
+into algebraic expressions (reduced space), or treated as external vector
+oracles (gray box).  OMLT automates predictor formulations in Pyomo
+\citep{ceccon2022omlt}; \citet{yang2021modeling} analyze embedded,
+mixed-integer, and complementarity representations; and
+\citet{kilwein2023feasibility} apply smooth neural feasibility surrogates to
+security-constrained optimal power flow.  MathOptAI provides full-, reduced-,
+and gray-box representations across Julia and PyTorch models
+\citep{dowson2025mathoptai}.  The systematic study of
+\citet{parker2024formulations} scales these representations to networks with
+hundreds of millions of parameters and identifies neural derivative evaluation
+as the gray-box bottleneck.  \citet{parker2025gpu} accelerate that bottleneck
+with PyTorch on an A100 while retaining CPU Ipopt.  We use their released MNIST
+recipe directly and extend the setting to KKT placement, cross-framework
+device transfer, problem-supplied sparsity, and their interaction with
+curvature.
+
+Published process-optimization studies reinforce that formulation size is not
+the only concern.  Neural surrogates can improve speed while changing
+convergence reliability and solution error \citep{bugosen2023flowsheet}.
+\citet{elorza2025nmpc} compare explicit and external-function embeddings for
+three PDE-surrogate NMPC cases and find that replacing mechanistic equations
+does not automatically accelerate local NLP solves.  We translate all three
+released checkpoints, retain their horizons and objectives, and use the
+mechanistic trajectory for an independent closed-loop check.
+
+\paragraph{Nonlinear programming on GPUs.}
+Interior-point methods repeatedly assemble and solve sparse KKT systems
+\citep{wachter2006ipopt,nocedal2006numerical}.  GPU factorization is difficult
+for indefinite systems requiring pivoting.  Condensed and hybrid
+reformulations enable pivoting-free or static-pivot GPU factorizations and have
+produced substantial gains on optimal-power-flow and dynamic-optimization
+instances \citep{shin2024opf,pacaud2024dynamic,pacaud2024condensed}.  Those
+studies use GPU-native algebraic modelers; our neural oracle resides in JAX and
+crosses a language/runtime boundary.  DLPack provides the common in-memory
+tensor representation used by our bridge \citep{dlpack}.  Concurrently,
+jaxipm targets a different regime---throughput over batches of same-family NLPs
+rather than latency for one large or receding-horizon problem
+\citep{viljoen2026jaxipm}.  We therefore do not compare its batched throughput
+with our single-instance timings.
+
+Warm-start evaluation depends on which interior-point state is supplied:
+\citet{suri2026warp} show that a strong AC-OPF primal point can be a weak
+barrier start.  We therefore separate primal, equality-dual, barrier, and
+persistent state rather than label all sequence reuse as ``warm start.''
+
+\paragraph{Curvature and benchmarking.}
+Exact Lagrangian Hessians can reduce iterations but have quadratic output size
+in the decision dimension and potentially much larger AD workspaces.
+L-BFGS trades curvature information for a compact history
+\citep{liu1989lbfgs}; Gauss--Newton is natural for least-squares inverse
+problems \citep{nocedal2006numerical}.  We report KKT success, iterations,
+time, and peak memory together, following the
+benchmarking principle that failures and common termination tests must remain
+visible \citep{dolan2002profiles}.
+
+\paragraph{Inverse design and optimization shift.}
+Neural operators learn maps between function spaces and can accelerate
+many-query PDE workloads \citep{li2021fno,kovachki2023neuraloperator}.
+Gradient-based input optimization through a learned forward model is also the
+basis of the neural-adjoint approach \citep{ren2020neuraladjoint}.  However,
+offline model-based optimization shows that directly optimizing a learned
+objective can exploit errors away from the training distribution
+\citep{trabucco2021coms,trabucco2022designbench}.  Classical surrogate model
+management similarly restricts or corrects models using high-fidelity
+evaluations \citep{alexandrov2000modelmanagement}.  We do not propose a new
+offline-MBO algorithm.  We apply the same evaluation requirement to
+constrained neural-surrogate NLPs: a solver comparison is incomplete until
+surrogate-optimal candidates are evaluated by an independent oracle whenever
+one exists.

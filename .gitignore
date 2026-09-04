@@ -3,7 +3,6 @@
 *.jl.*.cov
 *.jl.mem
 deps/deps.jl
-Manifest.toml
 LocalPreferences.toml
 
 # Python
@@ -35,6 +34,7 @@ htmlcov/
 
 # Virtual environments
 venv/
+.venv/
 ENV/
 env/
 
@@ -49,6 +49,7 @@ env/
 # Project specific
 output/
 data/
+/main.pdf
 *.pt
 *.pth
 *.npz

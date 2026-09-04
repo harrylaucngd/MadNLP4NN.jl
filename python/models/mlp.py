@@ -74,6 +74,17 @@ def build_mlp_jax(
         }
 
     n_layers = len(params)
+    activation_name = config.get("activation", "smooth_relu").lower()
+    output_activation = config.get("output_activation", "identity").lower()
+
+    def activate(value):
+        if activation_name == "tanh":
+            return jnp.tanh(value)
+        if activation_name == "sigmoid":
+            return jax.nn.sigmoid(value)
+        if activation_name == "softplus":
+            return jax.nn.softplus(value)
+        return smooth_relu(value)
 
     def forward(params_dict, x):
         out = x
@@ -82,7 +93,9 @@ def build_mlp_jax(
             b = params_dict[f"layer_{i}"]["b"]
             out = jnp.dot(W, out) + b
             if i < n_layers - 1:
-                out = smooth_relu(out)
+                out = activate(out)
+        if output_activation == "softmax":
+            out = jax.nn.softmax(out)
         return out
 
     return forward, params

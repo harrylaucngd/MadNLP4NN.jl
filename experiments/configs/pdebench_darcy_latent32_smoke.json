@@ -1,0 +1,9 @@
+{
+  "model": "output/external/pdebench/models/2D_DarcyFlow_beta1.0_Train_FNO.pt",
+  "data": "output/external/pdebench/data/2D_DarcyFlow_beta1.0_Train.hdf5",
+  "samples": [9257],
+  "latent_resolutions": [32],
+  "mean_lower": 0.18776977673542206,
+  "mean_upper": 0.8250976565395831,
+  "regularization_weight": 0.0001
+}

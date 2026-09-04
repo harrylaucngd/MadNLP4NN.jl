@@ -1,9 +1,10 @@
 """
-Julia interface to the proposal-aligned Python tooling.
+Julia interface to the repository's Python tooling.
 
-The repository now focuses on two workflows only:
-- Darcy/FNO data generation + surrogate training
-- Pareto surrogate data generation + training
+The public package helpers cover the legacy Darcy/FNO and Pareto examples.
+The registered research runners additionally use the evaluator factories for
+controlled oracles, adversarial MNIST, replayable Darcy/FNO inversion, and PFR
+NMPC under `experiments/`.
 """
 
 using PythonCall
