@@ -1,8 +1,7 @@
 # Experiment workspace
 
 This directory contains reproducible benchmark definitions, solver adapters,
-run schemas, and analysis scripts described in
-[`docs/research/RESEARCH_PLAN.md`](../docs/research/RESEARCH_PLAN.md).
+run schemas, and analysis scripts for the paper.
 
 Raw data, model checkpoints, logs, and run outputs belong under the ignored
 `output/` tree. Small immutable configs, checksums, and analysis code are

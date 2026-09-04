@@ -4,28 +4,6 @@ A research framework for constrained nonlinear optimization through fixed
 neural surrogates, combining JAX automatic differentiation with MadNLP's CPU
 and NVIDIA-GPU KKT implementations.
 
-> **Validated research snapshot (August 2026).** The registered experiment
-> schedule, CPU/GPU regressions, manuscript, and 31-check claim audit are
-> complete for the current paper. The historical course-report benchmarks are
-> not evidence for the current claims; their synthetic Pareto benchmark and
-> inverse-crime Darcy timing study are excluded from the paper evaluation.
-> The hypotheses, benchmark protocol, literature audit, and decision log are in
-> [`docs/research/RESEARCH_PLAN.md`](docs/research/RESEARCH_PLAN.md),
-> [`docs/research/LITERATURE_MAP.md`](docs/research/LITERATURE_MAP.md), and
-> [`docs/research/PILOT_RESULTS.md`](docs/research/PILOT_RESULTS.md). The
-> claim boundaries and reviewer-facing positioning are in
-> [`docs/research/SUBMISSION_STRATEGY.md`](docs/research/SUBMISSION_STRATEGY.md).
-> The deliberately unresolved simulator metadata for the historical public
-> Darcy artifact, and the completed independently replayable replacement, are
-> documented in
-> [`docs/research/DARCY_DATA_AUDIT.md`](docs/research/DARCY_DATA_AUDIT.md).
-> The complete anonymous ICLR-format manuscript is in
-> [`paper/iclr_workshop.pdf`](paper/iclr_workshop.pdf).
-> Large datasets, checkpoints, and raw run records remain under the ignored
-> `output/` tree; a clone contains the source, immutable configurations,
-> derived paper tables/figures, and final manuscript, but not those multi-GB
-> numerical artifacts.
-
 ## Overview
 
 MadNLP4NN.jl targets nonlinear programs of the form
